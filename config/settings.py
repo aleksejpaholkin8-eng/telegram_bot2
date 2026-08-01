@@ -1,7 +1,6 @@
 # ============================================
 # НАСТРОЙКИ БОТА
 # ============================================
-# Здесь хранятся все параметры: токен, адрес базы, тарифы.
 
 import os
 from pydantic_settings import BaseSettings
@@ -24,13 +23,14 @@ class Settings(BaseSettings):
     # Тариф по умолчанию для новых пользователей
     default_tariff: str = os.getenv("DEFAULT_TARIFF", "lite")
     
-    # API-ключи провайдеров (пока пустые, добавим на Этапе 3)
+    # API-ключи провайдеров (owner)
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
+    xai_api_key: str = os.getenv("XAI_API_KEY", "")
     deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
 
 
-# Создаём один объект настроек, который будем использовать везде
+# Создаём один объект настроек
 settings = Settings()
