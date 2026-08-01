@@ -18,20 +18,16 @@ from db.models import UserApiKey
 from sqlalchemy import select
 
 
-# Настройка LiteLLM
 if LITELLM_AVAILABLE:
-    litellm.drop_params = True  # Игнорировать неподдерживаемые параметры
+    litellm.drop_params = True
 
 
-async def get_api_key(user_id: int, provider: str = "groq") -> Tuple[str, str]:
+async def get_api_key(user_id: int, provider: str = "xai") -> Tuple[str, str]:
     """
     Находит API-ключ для пользователя.
-    Сначала проверяет BYOK (ключ пользователя), потом owner (ключ владельца).
-    
-    Возвращает: (ключ, источник)
-    Источник: "byok", "owner", "none"
+    BYOK → owner → none
     """
-    # 1. Проверяем BYOK (ключ пользователя)
+    # 1. Проверяем BYOK
     async with async_session() as session:
         result = await session.execute(
             select(UserApiKey).where(
@@ -44,16 +40,16 @@ async def get_api_key(user_id: int, provider: str = "groq") -> Tuple[str, str]:
         if byok:
             import base64
             try:
-                # Расшифровываем (пока просто base64, в проде — нормальное шифрование)
                 key = base64.b64decode(byok.key_encrypted.encode()).decode()
                 if key:
                     return key, "byok"
             except Exception:
-                pass  # Если расшифровка не удалась — идём дальше
+                pass
     
-    # 2. Проверяем owner-ключ из переменных окружения Railway
+    # 2. Проверяем owner-ключ
     owner_keys = {
         "groq": settings.groq_api_key,
+        "xai": settings.xai_api_key,
         "deepseek": settings.deepseek_api_key,
         "gemini": settings.gemini_api_key,
         "openai": settings.openai_api_key,
@@ -64,47 +60,42 @@ async def get_api_key(user_id: int, provider: str = "groq") -> Tuple[str, str]:
     if key:
         return key, "owner"
     
-    # 3. Ничего не нашли
     return "", "none"
 
 
 async def ask_llm(
     prompt: str,
     user_id: int,
-    model: str = "groq/llama-3.1-8b-instant",
+    model: str = "xai/grok-beta",
     system_prompt: str = "",
     max_tokens: int = 1000
 ) -> Tuple[str, bool]:
     """
-    Отправляет запрос к AI-модели через LiteLLM.
-    
-    prompt — вопрос пользователя
-    system_prompt — инструкция для AI (кто он и как отвечать)
-    
-    Возвращает: (ответ, успешно_ли)
+    Отправляет запрос к AI-модели.
+    По умолчанию используем xAI (Grok).
     """
     if not LITELLM_AVAILABLE:
-        return "❌ Ошибка: LiteLLM не установлен", False
+        return "❌ LiteLLM не установлен", False
     
-    # Получаем ключ
-    api_key, source = await get_api_key(user_id, provider="groq")
+    # Определяем провайдера из названия модели (xai/... или groq/...)
+    provider = model.split("/")[0] if "/" in model else "xai"
+    
+    api_key, source = await get_api_key(user_id, provider=provider)
     
     if not api_key:
         return (
-            "🔑 Нет доступного API-ключа.\n\n"
+            "🔑 Нет API-ключа.\n\n"
             "Варианты:\n"
-            "1. Владелец бота ещё не добавил ключ в настройки Railway\n"
-            "2. Добавь свой ключ через команду /setkey (BYOK)",
+            "1. Владелец ещё не добавил XAI_API_KEY в Railway\n"
+            "2. Добавь свой ключ: /setkey",
             False
         )
     
-    # Формируем сообщения для AI
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
     
-    # Отправляем запрос
     try:
         response = await litellm.acompletion(
             model=model,
@@ -119,4 +110,4 @@ async def ask_llm(
         
     except Exception as e:
         logging.error(f"Ошибка LLM: {e}")
-        return f"❌ Ошибка при обращении к AI:\n\n{str(e)[:300]}", False
+        return f"❌ Ошибка AI:\n\n{str(e)[:300]}", False
