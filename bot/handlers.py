@@ -318,7 +318,7 @@ async def smart_handler(message: types.Message):
     answer, success = await ask_llm(
         prompt=message.text,
         user_id=message.from_user.id,
-        model="xai/grok-2",
+        model="xai/grok-3-beta",
         system_prompt=system
     )
 
