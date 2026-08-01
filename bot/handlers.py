@@ -8,8 +8,8 @@ from aiogram.fsm.context import FSMContext
 
 from bot.states import UserRegistration
 from db.database import async_session
-from db.models import User, Role, Command, TariffFeature
-from sqlalchemy import select, func
+from db.models import User, Role, Command as CommandModel, TariffFeature, UserState
+from sqlalchemy import select
 
 router = Router()
 
@@ -43,7 +43,7 @@ async def get_or_create_user(message: types.Message):
 
 # ============ КОМАНДЫ ============
 
-@router.message(Command("start"))
+@router.message(Command(commands="start"))
 async def cmd_start(message: types.Message):
     user = await get_or_create_user(message)
     await message.answer(
@@ -59,7 +59,7 @@ async def cmd_start(message: types.Message):
     )
 
 
-@router.message(Command("help"))
+@router.message(Command(commands="help"))
 async def cmd_help(message: types.Message):
     await message.answer(
         "📖 <b>Справка</b>\n\n"
@@ -72,7 +72,7 @@ async def cmd_help(message: types.Message):
     )
 
 
-@router.message(Command("register"))
+@router.message(Command(commands="register"))
 async def cmd_register(message: types.Message, state: FSMContext):
     await state.set_state(UserRegistration.waiting_for_name)
     await message.answer(
@@ -121,7 +121,6 @@ async def process_confirm_yes(message: types.Message, state: FSMContext):
         user = result.scalar_one_or_none()
         
         if user:
-            from db.models import UserState
             # Создаём или обновляем состояние пользователя
             result2 = await session.execute(
                 select(UserState).where(UserState.user_id == message.from_user.id)
@@ -162,7 +161,7 @@ async def process_confirm_invalid(message: types.Message):
 
 # ============ НОВЫЕ КОМАНДЫ (БАЗА ДАННЫХ) ============
 
-@router.message(Command("roles"))
+@router.message(Command(commands="roles"))
 async def cmd_roles(message: types.Message):
     """Показывает роли, доступные в тарифе пользователя"""
     user = await get_or_create_user(message)
@@ -187,15 +186,15 @@ async def cmd_roles(message: types.Message):
         await message.answer(text)
 
 
-@router.message(Command("commands"))
+@router.message(Command(commands="commands"))
 async def cmd_commands(message: types.Message):
     """Показывает команды, доступные в тарифе пользователя"""
     user = await get_or_create_user(message)
     
     async with async_session() as session:
         result = await session.execute(
-            select(Command).where(
-                Command.tier_access.in_(["lite", user.tariff])
+            select(CommandModel).where(
+                CommandModel.tier_access.in_(["lite", user.tariff])
             )
         )
         commands = result.scalars().all()
