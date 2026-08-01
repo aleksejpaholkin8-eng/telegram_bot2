@@ -35,7 +35,7 @@ async def get_or_create_user(message: types.Message):
                 username=message.from_user.username,
                 first_name=message.from_user.first_name,
                 last_name=message.from_user.last_name,
-                tariff="lite"
+                tariff="pro"
             )
             session.add(user)
             await session.commit()
