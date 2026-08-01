@@ -22,7 +22,6 @@ router = Router()
 # ============ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ============
 
 async def get_or_create_user(message: types.Message):
-    """Находит или создаёт пользователя в БД"""
     async with async_session() as session:
         result = await session.execute(
             select(User).where(User.telegram_id == message.from_user.id)
@@ -35,11 +34,17 @@ async def get_or_create_user(message: types.Message):
                 username=message.from_user.username,
                 first_name=message.from_user.first_name,
                 last_name=message.from_user.last_name,
-                tariff="pro"
+                tariff="lite"  # ← это при создании
             )
             session.add(user)
             await session.commit()
-
+        
+        # ====== ВРЕМЕННО: принудительно меняем тариф на pro ======
+        if user.tariff != "pro":
+            user.tariff = "pro"
+            await session.commit()
+        # =========================================================
+        
         return user
 
 
