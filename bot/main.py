@@ -1,77 +1,44 @@
 # ============================================
-# ГЛАВНЫЙ ФАЙЛ БОТА (ЭТАП 0 — ЭХО-РЕЖИМ)
+# ГЛАВНЫЙ ФАЙЛ БОТА (ЭТАП 1 — FSM + КОМАНДЫ)
 # ============================================
-# Этот бот пока просто повторяет сообщения.
-# Нужно, чтобы проверить, что Railway работает.
 
-import asyncio      # Для асинхронной работы (бот не зависает)
-import logging      # Для записи логов (что происходит внутри)
-import os           # Для чтения переменных окружения (секретов)
+import asyncio
+import logging
+import os
 
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.fsm.storage.memory import MemoryStorage
 
-# --------------------------------------------
-# НАСТРОЙКА ЛОГОВ
-# --------------------------------------------
-# Все сообщения от бота будут видны в панели Railway
+from bot.handlers import router
+
+# Включаем логи — видно в Railway
 logging.basicConfig(level=logging.INFO)
 
-# --------------------------------------------
-# ЧТЕНИЕ ТОКЕНА
-# --------------------------------------------
-# Токен мы не пишем в код! Мы читаем его из переменных окружения.
-# Railway передаст его сюда из своей панели настроек.
+# Читаем токен из переменных Railway
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
-# Проверка: если токен не найден — бот не запустится и скажет об ошибке
 if not BOT_TOKEN:
     raise ValueError("❌ ОШИБКА: BOT_TOKEN не найден! Добавь токен в переменные окружения Railway.")
 
-# --------------------------------------------
-# СОЗДАНИЕ БОТА И ДИСПЕТЧЕРА
-# --------------------------------------------
-# Bot — это сам бот, который общается с Telegram
-# Dispatcher — это "диспетчер", который распределяет сообщения по обработчикам
-
+# Создаём бота
 bot = Bot(
     token=BOT_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
-dp = Dispatcher()
 
-# --------------------------------------------
-# ОБРАБОТЧИК ВСЕХ СООБЩЕНИЙ
-# --------------------------------------------
-# Эта функция вызывается каждый раз, когда кто-то пишет боту
-@dp.message()
-async def echo_handler(message: types.Message) -> None:
-    """
-    Пока бот просто отвечает эхом.
-    Это проверка, что всё работает.
-    """
-    # Формируем ответ
-    answer_text = (
-        f"🤖 <b>Бот работает!</b>\n\n"
-        f"Вы написали: {message.text}\n\n"
-        f"✅ Этап 0 пройден: Railway запущен, токен работает, aiogram подключён.\n"
-        f"📡 Режим: Polling (запросы к Telegram каждые несколько секунд)"
-    )
-    
-    # Отправляем ответ пользователю
-    await message.answer(answer_text)
+# Создаём хранилище состояний в памяти
+# (при перезапуске Railway диалоги сбросятся — это нормально для демо)
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
 
-# --------------------------------------------
-# ЗАПУСК БОТА
-# --------------------------------------------
+# Подключаем все обработчики из handlers.py
+dp.include_router(router)
+
+# Запуск
 async def main() -> None:
-    # Удаляем старые вебхуки (если вдруг были)
     await bot.delete_webhook(drop_pending_updates=True)
-    
-    # Начинаем "polling" — бот постоянно спрашивает Telegram: "есть новые сообщения?"
     await dp.start_polling(bot)
 
-# Точка входа: если файл запущен напрямую — запускаем main()
 if __name__ == "__main__":
     asyncio.run(main())
