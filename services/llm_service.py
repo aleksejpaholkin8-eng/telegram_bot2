@@ -66,7 +66,7 @@ async def get_api_key(user_id: int, provider: str = "xai") -> Tuple[str, str]:
 async def ask_llm(
     prompt: str,
     user_id: int,
-    model: str = "xai/grok-2",
+    model: str = "xai/grok-3-beta",
     system_prompt: str = "",
     max_tokens: int = 1000
 ) -> Tuple[str, bool]:
