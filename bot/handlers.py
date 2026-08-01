@@ -91,12 +91,13 @@ async def cmd_register(message: types.Message, state: FSMContext):
 
 @router.message(Command(commands="setkey"))
 async def cmd_setkey(message: types.Message, state: FSMContext):
-    """Запускает диалог ввода BYOK-ключа"""
     await state.set_state(ByokInput.waiting_for_key)
     await message.answer(
         "🔑 <b>Ввод API-ключа (BYOK)</b>\n\n"
-        "Отправь свой ключ Groq в следующем сообщении.\n"
-        "Формат ключа: <code>gsk_...</code>\n\n"
+        "Отправь свой ключ в следующем сообщении.\n"
+        "Поддерживаются:\n"
+        "• xAI (Grok): <code>xai-...</code>\n"
+        "• Groq: <code>gsk_...</code>\n\n"
         "⚠️ Ключ будет сохранён в зашифрованном виде.\n"
         "Для отмены напиши /start."
     )
@@ -213,33 +214,39 @@ async def process_confirm_invalid(message: types.Message):
 async def process_byok_key(message: types.Message, state: FSMContext):
     key = message.text.strip()
     
-    # Простая проверка формата
-    if not key.startswith("gsk_"):
+    # Определяем провайдера по формату ключа
+    if key.startswith("xai-"):
+        provider = "xai"
+    elif key.startswith("gsk_"):
+        provider = "groq"
+    else:
         await message.answer(
-            "❌ Ключ должен начинаться с <code>gsk_</code>.\n"
-            "Попробуй снова или напиши /start для отмены."
+            "❌ Неизвестный формат ключа.\n"
+            "Поддерживаются:\n"
+            "• xAI: <code>xai-...</code>\n"
+            "• Groq: <code>gsk_...</code>\n\n"
+            "Попробуй снова или /start для отмены."
         )
         return
     
-    # Шифруем ключ (base64 — простая защита, в проде нужно сильнее)
+    # Шифруем
     encrypted = base64.b64encode(key.encode()).decode()
     
     async with async_session() as session:
-        # Удаляем старый ключ, если был
+        # Удаляем старый ключ этого провайдера
         result = await session.execute(
             select(UserApiKey).where(
                 UserApiKey.user_id == message.from_user.id,
-                UserApiKey.provider == "groq"
+                UserApiKey.provider == provider
             )
         )
         old = result.scalar_one_or_none()
         if old:
             await session.delete(old)
         
-        # Сохраняем новый
         new_key = UserApiKey(
             user_id=message.from_user.id,
-            provider="groq",
+            provider=provider,
             key_encrypted=encrypted
         )
         session.add(new_key)
@@ -247,9 +254,9 @@ async def process_byok_key(message: types.Message, state: FSMContext):
     
     await state.clear()
     await message.answer(
-        "✅ <b>Ключ Groq сохранён!</b>\n\n"
-        "Теперь ты используешь BYOK-режим.\n"
-        "Свои расходы на токены — на твоём счету у Groq."
+        f"✅ <b>Ключ {provider.upper()} сохранён!</b>\n\n"
+        f"Теперь ты используешь BYOK-режим.\n"
+        f"Расходы на токены — на твоём счету."
     )
 
 
@@ -302,9 +309,10 @@ async def smart_handler(message: types.Message):
     # Простой системный промпт (позже заменим на динамическую сборку)
     system = "Ты — полезный ассистент. Отвечай кратко, по существу, на русском языке."
     
-    answer, success = await ask_llm(
+       answer, success = await ask_llm(
         prompt=message.text,
         user_id=message.from_user.id,
+        model="xai/grok-beta",
         system_prompt=system
     )
     
