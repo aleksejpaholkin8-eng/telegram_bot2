@@ -28,7 +28,7 @@ async def get_or_create_user(message: types.Message):
             select(User).where(User.telegram_id == message.from_user.id)
         )
         user = result.scalar_one_or_none()
-        
+
         if not user:
             user = User(
                 telegram_id=message.from_user.id,
@@ -39,7 +39,7 @@ async def get_or_create_user(message: types.Message):
             )
             session.add(user)
             await session.commit()
-        
+
         return user
 
 
@@ -71,7 +71,7 @@ async def cmd_help(message: types.Message):
         "• /register — сохранить имя и цель в базу\n"
         "• /roles — показать роли твоего тарифа\n"
         "• /commands — показать команды\n"
-        "• /setkey — ввести свой API-ключ Groq (BYOK)\n\n"
+        "• /setkey — ввести свой API-ключ (BYOK)\n\n"
         "🎫 Тарифы:\n"
         "🆓 Lite — команды и эхо, без AI\n"
         "⚡ Pro — AI через ключ владельца или свой (BYOK)\n"
@@ -91,6 +91,7 @@ async def cmd_register(message: types.Message, state: FSMContext):
 
 @router.message(Command(commands="setkey"))
 async def cmd_setkey(message: types.Message, state: FSMContext):
+    """Запускает диалог ввода BYOK-ключа"""
     await state.set_state(ByokInput.waiting_for_key)
     await message.answer(
         "🔑 <b>Ввод API-ключа (BYOK)</b>\n\n"
@@ -114,7 +115,7 @@ async def cmd_roles(message: types.Message):
             )
         )
         roles = result.scalars().all()
-        
+
         text = f"🎭 <b>Роли (тариф: {user.tariff.upper()}):</b>\n\n"
         for role in roles:
             icon = "🆓" if role.tier_access == "lite" else "💎"
@@ -134,7 +135,7 @@ async def cmd_commands(message: types.Message):
             )
         )
         commands = result.scalars().all()
-        
+
         text = f"⌨️ <b>Команды (тариф: {user.tariff.upper()}):</b>\n\n"
         for cmd in commands:
             icon = "✅" if cmd.tier_access == "lite" else "🔒"
@@ -170,13 +171,13 @@ async def process_goal(message: types.Message, state: FSMContext):
 @router.message(UserRegistration.waiting_for_confirm, F.text.lower() == "да")
 async def process_confirm_yes(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    
+
     async with async_session() as session:
         result = await session.execute(
             select(UserState).where(UserState.user_id == message.from_user.id)
         )
         us = result.scalar_one_or_none()
-        
+
         if not us:
             us = UserState(
                 user_id=message.from_user.id,
@@ -185,9 +186,9 @@ async def process_confirm_yes(message: types.Message, state: FSMContext):
             session.add(us)
         else:
             us.json_passport = {"name": data['name'], "goal": data['goal']}
-        
+
         await session.commit()
-    
+
     await state.clear()
     await message.answer(
         f"✅ <b>Регистрация завершена!</b>\n\n"
@@ -213,7 +214,7 @@ async def process_confirm_invalid(message: types.Message):
 @router.message(ByokInput.waiting_for_key)
 async def process_byok_key(message: types.Message, state: FSMContext):
     key = message.text.strip()
-    
+
     # Определяем провайдера по формату ключа
     if key.startswith("xai-"):
         provider = "xai"
@@ -228,10 +229,10 @@ async def process_byok_key(message: types.Message, state: FSMContext):
             "Попробуй снова или /start для отмены."
         )
         return
-    
+
     # Шифруем
     encrypted = base64.b64encode(key.encode()).decode()
-    
+
     async with async_session() as session:
         # Удаляем старый ключ этого провайдера
         result = await session.execute(
@@ -243,7 +244,7 @@ async def process_byok_key(message: types.Message, state: FSMContext):
         old = result.scalar_one_or_none()
         if old:
             await session.delete(old)
-        
+
         new_key = UserApiKey(
             user_id=message.from_user.id,
             provider=provider,
@@ -251,7 +252,7 @@ async def process_byok_key(message: types.Message, state: FSMContext):
         )
         session.add(new_key)
         await session.commit()
-    
+
     await state.clear()
     await message.answer(
         f"✅ <b>Ключ {provider.upper()} сохранён!</b>\n\n"
@@ -270,7 +271,7 @@ async def smart_handler(message: types.Message):
     Pro/Business → AI (если есть ключ и лимит не исчерпан)
     """
     user = await get_or_create_user(message)
-    
+
     # --- РЕЖИМ LITE: без AI ---
     if user.tariff == "lite":
         await message.answer(
@@ -281,7 +282,7 @@ async def smart_handler(message: types.Message):
             f"💡 Команды: /start /help /register /roles /commands /setkey"
         )
         return
-    
+
     # --- РЕЖИМ PRO/BUSINESS: проверяем лимит ---
     has_access, limit_msg = await check_token_limit(message.from_user.id, user.tariff)
     if not has_access:
@@ -290,38 +291,38 @@ async def smart_handler(message: types.Message):
             f"Вы написали: {message.text}"
         )
         return
-    
+
     # --- Проверяем наличие ключа ---
-    api_key, source = await get_api_key(message.from_user.id, "groq")
+    api_key, source = await get_api_key(message.from_user.id, "xai")
     if not api_key:
         await message.answer(
             f"🔑 <b>Нет API-ключа</b>\n\n"
             f"Варианты:\n"
-            f"1. Владелец бота ещё не добавил ключ в Railway Variables\n"
+            f"1. Владелец бота ещё не добавил XAI_API_KEY в Railway Variables\n"
             f"2. Добавь свой ключ: /setkey (BYOK)\n\n"
             f"Вы написали: {message.text}"
         )
         return
-    
+
     # --- Отправляем в AI ---
     wait_msg = await message.answer("⏳ Думаю...")
-    
+
     # Простой системный промпт (позже заменим на динамическую сборку)
     system = "Ты — полезный ассистент. Отвечай кратко, по существу, на русском языке."
-    
-       answer, success = await ask_llm(
+
+    answer, success = await ask_llm(
         prompt=message.text,
         user_id=message.from_user.id,
         model="xai/grok-beta",
         system_prompt=system
     )
-    
+
     # Удаляем сообщение "Думаю..."
     try:
         await wait_msg.delete()
     except Exception:
         pass
-    
+
     if success:
         source_icon = "🔑" if source == "byok" else "⚡"
         await message.answer(f"{source_icon} <b>Ответ AI:</b>\n\n{answer}")
