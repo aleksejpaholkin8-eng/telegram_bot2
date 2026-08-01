@@ -1,55 +1,37 @@
 # ============================================
-# СЕРВИС ДЛЯ РАБОТЫ С AI (LLM)
+# СЕРВИС РАБОТЫ С AI (LiteLLM)
 # ============================================
 
-import os
 import logging
-from typing import Optional
+from typing import Tuple
 
-from litellm import acompletion
+try:
+    import litellm
+    LITELLM_AVAILABLE = True
+except ImportError:
+    LITELLM_AVAILABLE = False
+    logging.warning("LiteLLM не установлен")
 
+from config.settings import settings
 from db.database import async_session
-from db.models import User, UserApiKey, TariffFeature
+from db.models import UserApiKey
 from sqlalchemy import select
-from services.encryption import decrypt_key
-
-logger = logging.getLogger(__name__)
 
 
-async def check_llm_access(user_id: int) -> tuple[bool, int]:
+# Настройка LiteLLM
+if LITELLM_AVAILABLE:
+    litellm.drop_params = True  # Игнорировать неподдерживаемые параметры
+
+
+async def get_api_key(user_id: int, provider: str = "groq") -> Tuple[str, str]:
     """
-    Проверяет, есть ли у пользователя доступ к AI.
-    Возвращает: (доступен_ли, лимит_токенов)
+    Находит API-ключ для пользователя.
+    Сначала проверяет BYOK (ключ пользователя), потом owner (ключ владельца).
+    
+    Возвращает: (ключ, источник)
+    Источник: "byok", "owner", "none"
     """
-    async with async_session() as session:
-        result = await session.execute(
-            select(User).where(User.telegram_id == user_id)
-        )
-        user = result.scalar_one_or_none()
-        if not user:
-            return False, 0
-        
-        # Смотрим лимит токенов в тарифе
-        result2 = await session.execute(
-            select(TariffFeature).where(
-                TariffFeature.tariff == user.tariff,
-                TariffFeature.feature == "max_daily_tokens"
-            )
-        )
-        feature = result2.scalar_one_or_none()
-        if not feature:
-            return False, 0
-        
-        # Если лимит 0 — значит LLM недоступен (Lite)
-        return feature.limit_value > 0, feature.limit_value
-
-
-async def get_api_key(user_id: int, provider: str = "xai") -> Optional[str]:
-    """
-    Возвращает API-ключ для запроса к AI.
-    Сначала ищет BYOK (ключ пользователя), потом owner-ключ из Railway.
-    """
-    # 1. Проверяем BYOK пользователя
+    # 1. Проверяем BYOK (ключ пользователя)
     async with async_session() as session:
         result = await session.execute(
             select(UserApiKey).where(
@@ -57,62 +39,84 @@ async def get_api_key(user_id: int, provider: str = "xai") -> Optional[str]:
                 UserApiKey.provider == provider
             )
         )
-        user_key = result.scalar_one_or_none()
-        if user_key:
-            return decrypt_key(user_key.key_encrypted)
+        byok = result.scalar_one_or_none()
+        
+        if byok:
+            import base64
+            try:
+                # Расшифровываем (пока просто base64, в проде — нормальное шифрование)
+                key = base64.b64decode(byok.key_encrypted.encode()).decode()
+                if key:
+                    return key, "byok"
+            except Exception:
+                pass  # Если расшифровка не удалась — идём дальше
     
-    # 2. Проверяем owner-ключ из переменных окружения
+    # 2. Проверяем owner-ключ из переменных окружения Railway
     owner_keys = {
-        "xai": os.getenv("XAI_API_KEY"),
-        "deepseek": os.getenv("DEEPSEEK_API_KEY"),
-        "gemini": os.getenv("GEMINI_API_KEY"),
-        "openai": os.getenv("OPENAI_API_KEY"),
-        "anthropic": os.getenv("ANTHROPIC_API_KEY"),
+        "groq": settings.groq_api_key,
+        "deepseek": settings.deepseek_api_key,
+        "gemini": settings.gemini_api_key,
+        "openai": settings.openai_api_key,
+        "anthropic": settings.anthropic_api_key,
     }
     
-    return owner_keys.get(provider)
-
-
-async def ask_llm(user_id: int, user_message: str, system_prompt: str = "") -> str:
-    """
-    Отправляет вопрос в AI и возвращает ответ.
-    Автоматически проверяет тариф и выбирает API-ключ.
-    """
-    # Проверяем доступ
-    has_access, limit = await check_llm_access(user_id)
-    if not has_access:
-        return (
-            "🚫 <b>Доступ запрещён</b>\n\n"
-            "В вашем тарифе <b>Lite</b> нет доступа к AI-моделям.\n"
-            "Обновите тариф до <b>Pro</b> или <b>Business</b>."
-        )
+    key = owner_keys.get(provider, "")
+    if key:
+        return key, "owner"
     
-    # Получаем API-ключ
-    api_key = await get_api_key(user_id, "xai")
+    # 3. Ничего не нашли
+    return "", "none"
+
+
+async def ask_llm(
+    prompt: str,
+    user_id: int,
+    model: str = "groq/llama-3.1-8b-instant",
+    system_prompt: str = "",
+    max_tokens: int = 1000
+) -> Tuple[str, bool]:
+    """
+    Отправляет запрос к AI-модели через LiteLLM.
+    
+    prompt — вопрос пользователя
+    system_prompt — инструкция для AI (кто он и как отвечать)
+    
+    Возвращает: (ответ, успешно_ли)
+    """
+    if not LITELLM_AVAILABLE:
+        return "❌ Ошибка: LiteLLM не установлен", False
+    
+    # Получаем ключ
+    api_key, source = await get_api_key(user_id, provider="groq")
+    
     if not api_key:
         return (
-            "⚠️ <b>API-ключ не настроен</b>\n\n"
-            "Администратору нужно добавить XAI_API_KEY в Railway Variables,\n"
-            "или используйте /setkey чтобы добавить свой ключ (BYOK)."
+            "🔑 Нет доступного API-ключа.\n\n"
+            "Варианты:\n"
+            "1. Владелец бота ещё не добавил ключ в настройки Railway\n"
+            "2. Добавь свой ключ через команду /setkey (BYOK)",
+            False
         )
     
-    # Отправляем запрос в Groq (бесплатная модель Llama 3.1)
+    # Формируем сообщения для AI
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+    
+    # Отправляем запрос
     try:
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": user_message})
-        
-        response = await acompletion(
-            model="groq/llama-3.1-8b-instant",
+        response = await litellm.acompletion(
+            model=model,
             messages=messages,
             api_key=api_key,
-            max_tokens=1000,
-            temperature=0.7
+            max_tokens=max_tokens,
+            temperature=0.7,
         )
         
-        return response.choices[0].message.content
+        answer = response.choices[0].message.content
+        return answer, True
         
     except Exception as e:
-        logger.error(f"LLM error: {e}")
-        return f"❌ Ошибка при обращении к AI:\n<code>{str(e)[:300]}</code>"
+        logging.error(f"Ошибка LLM: {e}")
+        return f"❌ Ошибка при обращении к AI:\n\n{str(e)[:300]}", False
