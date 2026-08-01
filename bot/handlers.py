@@ -318,7 +318,7 @@ async def smart_handler(message: types.Message):
     answer, success = await ask_llm(
         prompt=message.text,
         user_id=message.from_user.id,
-        model="gemini-1.5-flash",
+        model="groq/llama-3.3-70b-versatile",
         system_prompt=system
     )
 
