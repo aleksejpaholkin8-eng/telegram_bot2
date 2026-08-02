@@ -796,111 +796,6 @@ async def process_byok_key(message: types.Message, state: FSMContext):
 
 # ============ УМНЫЙ ОБРАБОТЧИК (ИЗМЕНЕНО — счётчик токенов) ============
 
-@router.message()
-async def smart_handler(message: types.Message):
-    """
-    Главный обработчик сообщений.
-    Lite → эхо
-    Pro/Business → выбор ролей → сборка промпта → AI
-    """
-    user = await get_or_create_user(message)
-
-    # --- РЕЖИМ LITE: без AI ---
-    if user.tariff == "lite":
-        await message.answer(
-            f"🤖 <b>Режим LITE</b>\n\n"
-            f"Вы написали: {message.text}\n\n"
-            f"В этом тарифе AI недоступен.\n"
-            f"Обнови до Pro, чтобы получить умные ответы.\n\n"
-            f"💡 Команды: /start /help /register /roles /commands /setkey"
-        )
-        return
-
-    # --- РЕЖИМ PRO/BUSINESS: проверяем лимит ---
-    has_access, limit_msg = await check_token_limit(message.from_user.id, user.tariff)
-    if not has_access:
-        await message.answer(
-            f"⛔ <b>Лимит исчерпан</b>\n\n{limit_msg}\n\n"
-            f"Вы написали: {message.text}"
-        )
-        return
-
-    # --- Проверяем наличие ключа ---
-    default_model = "groq/llama-3.3-70b-versatile"
-    provider = default_model.split("/")[0]
-    
-    api_key, source = await get_api_key(message.from_user.id, provider=provider)
-    if not api_key:
-        await message.answer(
-            f"🔑 <b>Нет API-ключа</b>\n\n"
-            f"Варианты:\n"
-            f"1. Владелец бота ещё не добавил {provider.upper()}_API_KEY в Railway Variables\n"
-            f"2. Добавь свой ключ: /setkey (BYOK)\n\n"
-            f"Вы написали: {message.text}"
-        )
-        return
-
-    # --- ВЫБИРАЕМ РОЛИ И СОБИРАЕМ ПРОМПТ ---
-    wait_msg = await message.answer("⏳ Анализирую запрос и выбираю роли...")
-    
-    _, max_roles = await check_feature_access(user.tariff, "max_roles")
-    if max_roles == 0:
-        max_roles = 5
-        
-    selected_roles = await select_roles(message.from_user.id, message.text, max_roles=max_roles)
-    
-    system_prompt = await build_system_prompt(message.from_user.id, selected_roles)
-    
-    roles_names = ", ".join([r.name.split(":")[0] for r in selected_roles[:3]])
-    try:
-        await wait_msg.edit_text(f"⚡ Активированы роли: {roles_names}\n⏳ Думаю...")
-    except Exception:
-        pass
-
-    # --- ОТПРАВЛЯЕМ В AI ---
-    answer, success = await ask_llm(
-        prompt=message.text,
-        user_id=message.from_user.id,
-        model=default_model,
-        system_prompt=system_prompt
-    )
-
-       # --- Показываем ответ и обновляем счётчик токенов ---
-    if success:
-        # ← НОВОЕ: примерно считаем токены и сохраняем в БД
-        try:
-            tokens_used = count_tokens(message.text) + count_tokens(answer)
-            async with async_session() as session:
-                result = await session.execute(
-                    select(UserState).where(UserState.user_id == message.from_user.id)
-                )
-                us = result.scalar_one_or_none()
-                if us:
-                    counters = us.counters or {}
-                    counters["daily_tokens"] = counters.get("daily_tokens", 0) + tokens_used
-                    us.counters = counters
-                    await session.commit()
-        except Exception:
-            pass
-        
-        source_icon = "🔑" if source == "byok" else "⚡"
-        roles_info = f"\n\n<i>🎭 Активные роли: {roles_names}</i>" if selected_roles else ""
-        
-        # ← НОВОЕ: разбиваем длинный ответ на части (лимит Telegram 4096)
-        full_text = f"{source_icon} <b>Ответ AI:</b>\n\n{answer}{roles_info}"
-        
-        if len(full_text) > 4000:
-            parts = [answer[i:i+4000] for i in range(0, len(answer), 4000)]
-            for idx, part in enumerate(parts):
-                prefix = f"{source_icon} <b>Ответ AI (часть {idx+1}/{len(parts)}):</b>\n\n"
-                suffix = roles_info if idx == len(parts) - 1 else ""
-                await message.answer(f"{prefix}{part}{suffix}")
-        else:
-            await message.answer(full_text)
-    else:
-        await message.answer(f"❌ <b>Ошибка:</b>\n\n{answer}")
-
-
 @router.message(F.text == "🔧 Админ-меню")
 async def admin_menu_button(message: types.Message):
     """Обрабатывает нажатие reply-кнопки Админ-меню (только владелец)"""
@@ -1051,3 +946,109 @@ async def admin_role_toggle(callback: types.CallbackQuery):
     # Обновляем список (редирект на страницу 0 для простоты)
     callback.data = f"admin:roles:tariff:{tariff}:page:0"
     await admin_roles_list(callback)
+
+
+@router.message()
+async def smart_handler(message: types.Message):
+    """
+    Главный обработчик сообщений.
+    Lite → эхо
+    Pro/Business → выбор ролей → сборка промпта → AI
+    """
+    user = await get_or_create_user(message)
+
+    # --- РЕЖИМ LITE: без AI ---
+    if user.tariff == "lite":
+        await message.answer(
+            f"🤖 <b>Режим LITE</b>\n\n"
+            f"Вы написали: {message.text}\n\n"
+            f"В этом тарифе AI недоступен.\n"
+            f"Обнови до Pro, чтобы получить умные ответы.\n\n"
+            f"💡 Команды: /start /help /register /roles /commands /setkey"
+        )
+        return
+
+    # --- РЕЖИМ PRO/BUSINESS: проверяем лимит ---
+    has_access, limit_msg = await check_token_limit(message.from_user.id, user.tariff)
+    if not has_access:
+        await message.answer(
+            f"⛔ <b>Лимит исчерпан</b>\n\n{limit_msg}\n\n"
+            f"Вы написали: {message.text}"
+        )
+        return
+
+    # --- Проверяем наличие ключа ---
+    default_model = "groq/llama-3.3-70b-versatile"
+    provider = default_model.split("/")[0]
+    
+    api_key, source = await get_api_key(message.from_user.id, provider=provider)
+    if not api_key:
+        await message.answer(
+            f"🔑 <b>Нет API-ключа</b>\n\n"
+            f"Варианты:\n"
+            f"1. Владелец бота ещё не добавил {provider.upper()}_API_KEY в Railway Variables\n"
+            f"2. Добавь свой ключ: /setkey (BYOK)\n\n"
+            f"Вы написали: {message.text}"
+        )
+        return
+
+    # --- ВЫБИРАЕМ РОЛИ И СОБИРАЕМ ПРОМПТ ---
+    wait_msg = await message.answer("⏳ Анализирую запрос и выбираю роли...")
+    
+    _, max_roles = await check_feature_access(user.tariff, "max_roles")
+    if max_roles == 0:
+        max_roles = 5
+        
+    selected_roles = await select_roles(message.from_user.id, message.text, max_roles=max_roles)
+    
+    system_prompt = await build_system_prompt(message.from_user.id, selected_roles)
+    
+    roles_names = ", ".join([r.name.split(":")[0] for r in selected_roles[:3]])
+    try:
+        await wait_msg.edit_text(f"⚡ Активированы роли: {roles_names}\n⏳ Думаю...")
+    except Exception:
+        pass
+
+    # --- ОТПРАВЛЯЕМ В AI ---
+    answer, success = await ask_llm(
+        prompt=message.text,
+        user_id=message.from_user.id,
+        model=default_model,
+        system_prompt=system_prompt
+    )
+
+       # --- Показываем ответ и обновляем счётчик токенов ---
+    if success:
+        # ← НОВОЕ: примерно считаем токены и сохраняем в БД
+        try:
+            tokens_used = count_tokens(message.text) + count_tokens(answer)
+            async with async_session() as session:
+                result = await session.execute(
+                    select(UserState).where(UserState.user_id == message.from_user.id)
+                )
+                us = result.scalar_one_or_none()
+                if us:
+                    counters = us.counters or {}
+                    counters["daily_tokens"] = counters.get("daily_tokens", 0) + tokens_used
+                    us.counters = counters
+                    await session.commit()
+        except Exception:
+            pass
+        
+        source_icon = "🔑" if source == "byok" else "⚡"
+        roles_info = f"\n\n<i>🎭 Активные роли: {roles_names}</i>" if selected_roles else ""
+        
+        # ← НОВОЕ: разбиваем длинный ответ на части (лимит Telegram 4096)
+        full_text = f"{source_icon} <b>Ответ AI:</b>\n\n{answer}{roles_info}"
+        
+        if len(full_text) > 4000:
+            parts = [answer[i:i+4000] for i in range(0, len(answer), 4000)]
+            for idx, part in enumerate(parts):
+                prefix = f"{source_icon} <b>Ответ AI (часть {idx+1}/{len(parts)}):</b>\n\n"
+                suffix = roles_info if idx == len(parts) - 1 else ""
+                await message.answer(f"{prefix}{part}{suffix}")
+        else:
+            await message.answer(full_text)
+    else:
+        await message.answer(f"❌ <b>Ошибка:</b>\n\n{answer}")
+        
