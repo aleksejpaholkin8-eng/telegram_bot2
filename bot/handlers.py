@@ -10,7 +10,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.states import UserRegistration, ByokInput, UploadPrompt, AdminEditLimit
 from db.database import async_session
-from db.models import User, Role, Command as CommandModel, UserState, UserApiKey, TariffFeature
+from db.models import User, Role, Command as CommandModel, UserState, UserApiKey, TariffFeature, RoleTariffAccess
 from sqlalchemy import select
 
 from services.llm_service import ask_llm, get_api_key
