@@ -219,6 +219,183 @@ async def cmd_settariff(message: types.Message):
     )
 
 
+# ============ КОМАНДА /upload_prompt (ТОЛЬКО ДЛЯ ВЛАДЕЛЬЦА) ============
+
+@router.message(Command(commands="upload_prompt"))
+async def cmd_upload_prompt(message: types.Message):
+    """
+    Запускает процесс загрузки нового промпта.
+    Только для владельца. Бот ждёт файл .md или текст.
+    """
+    from config.settings import settings
+    
+    if message.from_user.id != settings.owner_id:
+        await message.answer("⛔ Эта команда только для владельца бота.")
+        return
+    
+    await message.answer(
+        "📤 <b>Загрузка нового промпта</b>\n\n"
+        "Отправь мне файл <code>.md</code> (Промпт 1) или вставь его текст сообщением.\n\n"
+        "⚠️ <b>Важно:</b>\n"
+        "• Пользовательские данные (треки, паспорт, тариф) сохранятся\n"
+        "• Существующие роли обновятся, новые добавятся\n"
+        "• Для отмены напиши /start\n\n"
+        "Жду файл или текст..."
+    )
+
+
+@router.message(F.document)
+async def handle_document_upload(message: types.Message):
+    """
+    Обрабатывает загруженный файл .md
+    """
+    from config.settings import settings
+    from parsers.prompt_parser import parse_prompt_text
+    
+    if message.from_user.id != settings.owner_id:
+        return  # Игнорируем файлы от обычных пользователей
+    
+    doc = message.document
+    if not doc.file_name.endswith('.md'):
+        await message.answer("❌ Нужен файл с расширением <code>.md</code>")
+        return
+    
+    # Скачиваем файл
+    wait_msg = await message.answer("⏳ Скачиваю файл...")
+    
+    try:
+        file = await message.bot.get_file(doc.file_id)
+        file_content = await message.bot.download_file(file.file_path)
+        text = file_content.read().decode('utf-8')
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ Ошибка скачивания: {e}")
+        return
+    
+    await wait_msg.edit_text("🔍 Парсю файл...")
+    await _process_prompt_text(message, text, wait_msg)
+
+
+@router.message(F.text, ~F.text.startswith('/'))
+async def handle_text_upload(message: types.Message):
+    """
+    Обрабатывает текст промпта, вставленный сообщением.
+    Срабатывает только если предыдущее сообщение было /upload_prompt
+    """
+    from config.settings import settings
+    from parsers.prompt_parser import parse_prompt_text
+    
+    if message.from_user.id != settings.owner_id:
+        return  # Игнорируем
+    
+    # Проверяем, что текст достаточно длинный (похож на промпт)
+    if len(message.text) < 1000:
+        return  # Слишком короткий — игнорируем, это обычное сообщение
+    
+    wait_msg = await message.answer("🔍 Парсю текст...")
+    await _process_prompt_text(message, message.text, wait_msg)
+
+
+async def _process_prompt_text(message: types.Message, text: str, wait_msg: types.Message):
+    """
+    Общая логика: парсинг + дельта-обновление БД
+    """
+    from parsers.prompt_parser import parse_prompt_text
+    from db.database import async_session
+    from db.models import Role, Rule, Command
+    from sqlalchemy import select
+    
+    try:
+        parsed = parse_prompt_text(text)
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ Ошибка парсинга: {e}")
+        return
+    
+    # Проверяем, что нашли хоть что-то
+    if not parsed.roles and not parsed.rules:
+        await wait_msg.edit_text(
+            "❌ В файле не найдены роли или правила.\n\n"
+            "Проверь формат файла. Ожидается структура Промпта 1."
+        )
+        return
+    
+    async with async_session() as session:
+        added_roles = 0
+        updated_roles = 0
+        added_rules = 0
+        updated_rules = 0
+        added_cmds = 0
+        updated_cmds = 0
+        
+        # --- РОЛИ (дельта-обновление) ---
+        for role in parsed.roles:
+            result = await session.execute(select(Role).where(Role.name == role.name))
+            existing = result.scalar_one_or_none()
+            
+            if existing:
+                # Обновляем, но НЕ трогаем пользовательские данные
+                existing.prompt_text = role.prompt_text
+                existing.keywords = role.keywords
+                existing.group_name = role.group_name
+                existing.tier_access = role.tier_access
+                existing.is_active = True
+                updated_roles += 1
+            else:
+                session.add(Role(
+                    name=role.name,
+                    group_name=role.group_name,
+                    prompt_text=role.prompt_text,
+                    keywords=role.keywords,
+                    tier_access=role.tier_access
+                ))
+                added_roles += 1
+        
+        # --- ПРАВИЛА ---
+        for rule in parsed.rules:
+            result = await session.execute(select(Rule).where(Rule.number == rule.number))
+            existing = result.scalar_one_or_none()
+            
+            if existing:
+                existing.text = rule.text
+                updated_rules += 1
+            else:
+                session.add(Rule(number=rule.number, text=rule.text))
+                added_rules += 1
+        
+        # --- КОМАНДЫ ---
+        for cmd in parsed.commands:
+            result = await session.execute(select(Command).where(Command.name == cmd.name))
+            existing = result.scalar_one_or_none()
+            
+            if existing:
+                existing.description = cmd.description
+                existing.cluster = cmd.cluster
+                existing.tier_access = cmd.tier_access
+                updated_cmds += 1
+            else:
+                session.add(Command(
+                    cluster=cmd.cluster,
+                    name=cmd.name,
+                    description=cmd.description,
+                    tier_access=cmd.tier_access
+                ))
+                added_cmds += 1
+        
+        await session.commit()
+    
+    # Формируем отчёт
+    report = (
+        f"✅ <b>Промпт загружен!</b>\n\n"
+        f"📊 <b>Статистика:</b>\n"
+        f"🎭 Роли: +{added_roles} новых, 🔄 {updated_roles} обновлено\n"
+        f"📜 Правила: +{added_rules} новых, 🔄 {updated_rules} обновлено\n"
+        f"⌨️ Команды: +{added_cmds} новых, 🔄 {updated_cmds} обновлено\n\n"
+        f"💾 Пользовательские данные сохранены.\n"
+        f"Проверь: /roles, /commands"
+    )
+    
+    await wait_msg.edit_text(report)
+
+
 # ============ FSM: РЕГИСТРАЦИЯ ============
 
 @router.message(UserRegistration.waiting_for_name)
