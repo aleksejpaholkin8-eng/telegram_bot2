@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     # Telegram
     bot_token: str = os.getenv("BOT_TOKEN", "")
     
+    # Владелец бота (твой Telegram ID)
+    owner_id: int = int(os.getenv("OWNER_ID", "0"))  # ← ДОБАВЬ ЭТУ СТРОКУ
+    
     # База данных (Railway добавит DATABASE_URL автоматически)
     database_url: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./bot.db")
     
