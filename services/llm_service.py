@@ -1,5 +1,5 @@
 # ============================================
-# СЕРВИС РАБОТЫ С AI (LiteLLM)
+# СЕРВИС РАБОТЫ С AI (LiteLLM) — ИСПРАВЛЕННОЕ ШИФРОВАНИЕ
 # ============================================
 
 import logging
@@ -16,7 +16,7 @@ from config.settings import settings
 from db.database import async_session
 from db.models import UserApiKey
 from sqlalchemy import select
-
+from services.encryption import decrypt_key  # ← ИСПРАВЛЕНИЕ: Fernet-расшифровка
 
 if LITELLM_AVAILABLE:
     litellm.drop_params = True
@@ -38,13 +38,13 @@ async def get_api_key(user_id: int, provider: str = "xai") -> Tuple[str, str]:
         byok = result.scalar_one_or_none()
         
         if byok:
-            import base64
             try:
-                key = base64.b64decode(byok.key_encrypted.encode()).decode()
+                # ← ИСПРАВЛЕНИЕ: расшифровываем через Fernet
+                key = decrypt_key(byok.key_encrypted)
                 if key:
                     return key, "byok"
-            except Exception:
-                pass
+            except Exception as e:
+                logging.error(f"Ошибка расшифровки BYOK: {e}")
     
     # 2. Проверяем owner-ключ
     owner_keys = {
@@ -72,13 +72,13 @@ async def ask_llm(
 ) -> Tuple[str, bool]:
     """
     Отправляет запрос к AI-модели.
-    По умолчанию используем xAI (Grok).
+    По умолчанию используем Groq (бесплатный tier).
     """
     if not LITELLM_AVAILABLE:
         return "❌ LiteLLM не установлен", False
     
-    # Определяем провайдера из названия модели (xai/... или groq/...)
-    provider = model.split("/")[0] if "/" in model else "xai"
+    # Определяем провайдера из названия модели (groq/... или xai/...)
+    provider = model.split("/")[0] if "/" in model else "groq"
     
     api_key, source = await get_api_key(user_id, provider=provider)
     
@@ -86,7 +86,7 @@ async def ask_llm(
         return (
             "🔑 Нет API-ключа.\n\n"
             "Варианты:\n"
-            "1. Владелец ещё не добавил XAI_API_KEY в Railway\n"
+            "1. Владелец ещё не добавил API-ключ в переменные окружения\n"
             "2. Добавь свой ключ: /setkey",
             False
         )
