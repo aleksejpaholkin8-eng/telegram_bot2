@@ -91,3 +91,12 @@ class TariffFeature(Base):
     feature = Column(String(100), nullable=False)       # Название функции
     access = Column(Boolean, default=False)             # Доступна ли функция
     limit_value = Column(Integer, nullable=True)        # Лимит (например, 5000 токенов)
+
+class RoleTariffAccess(Base):
+    """Какие роли доступны в каком тарифе (ручное управление админом)"""
+    __tablename__ = "role_tariff_access"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    role_id = Column(Integer, nullable=False, index=True)
+    tariff = Column(String(20), nullable=False, index=True)
+    access = Column(Boolean, default=False)
