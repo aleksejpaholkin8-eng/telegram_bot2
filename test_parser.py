@@ -1,4 +1,4 @@
-# test_parser.py — временный скрипт для проверки парсера
+# test_parser.py — тест парсера на твоём Промпте 1
 import asyncio
 from parsers.prompt_parser import parse_prompt_file
 from db.database import init_db, async_session
@@ -7,71 +7,68 @@ from sqlalchemy import select
 
 
 async def test():
-    # 1. Парсим файл
-    print("🔍 Парсим test_prompt.md...")
-    parsed = parse_prompt_file("test_prompt.md")
+    print("🔍 Парсим prompt_full.txt...")
+    parsed = parse_prompt_file("prompt_full.txt")
     print(f"✅ Найдено: {parsed.summary()}")
     
-    # 2. Показываем детали
-    print("\n--- РОЛИ ---")
-    for r in parsed.roles:
-        print(f"  🎭 {r.name}")
-        print(f"     Группа: {r.group_name}")
-        print(f"     Тариф: {r.tier_access}")
-        print(f"     Keywords: {r.keywords}")
-        print(f"     Промпт: {r.prompt_text[:60]}...")
-        print()
+    print("\n--- ПЕРВЫЕ 5 РОЛЕЙ ---")
+    for r in parsed.roles[:5]:
+        print(f"\n🎭 {r.name}")
+        print(f"   Группа: {r.group_name}")
+        print(f"   Тариф: {r.tier_access}")
+        print(f"   Keywords: {r.keywords}")
+        print(f"   Промпт: {r.prompt_text[:80]}...")
     
-    print("--- ПРАВИЛА ---")
-    for rule in parsed.rules:
-        print(f"  📜 {rule.number}. {rule.text}")
+    print(f"\n--- ПОСЛЕДНИЕ 3 РОЛИ ---")
+    for r in parsed.roles[-3:]:
+        print(f"\n🎭 {r.name} ({r.group_name}, {r.tier_access})")
+        print(f"   Keywords: {r.keywords}")
     
-    print("\n--- КОМАНДЫ ---")
-    for cmd in parsed.commands:
-        print(f"  ⌨️ {cmd.name} ({cmd.cluster}, {cmd.tier_access}) — {cmd.description}")
+    print(f"\n--- ПРАВИЛА (первые 5) ---")
+    for rule in parsed.rules[:5]:
+        print(f"  📜 {rule.number}. {rule.text[:100]}...")
     
-    # 3. Загружаем в БД (upsert)
-    print("\n💾 Загружаем в БД...")
+    print(f"\n--- КОМАНДЫ (первые 10) ---")
+    for cmd in parsed.commands[:10]:
+        print(f"  ⌨️ {cmd.name} ({cmd.cluster}) — {cmd.description[:60]}...")
+    
+    print(f"\n💾 Загружаем в БД...")
     await init_db()
     
     async with async_session() as session:
+        # Upsert ролей
         for role in parsed.roles:
-            result = await session.execute(
-                select(Role).where(Role.name == role.name)
-            )
+            result = await session.execute(select(Role).where(Role.name == role.name))
             existing = result.scalar_one_or_none()
-            
             if existing:
                 existing.prompt_text = role.prompt_text
                 existing.keywords = role.keywords
                 existing.group_name = role.group_name
                 existing.tier_access = role.tier_access
-                print(f"  🔄 Обновлена: {role.name}")
+                existing.is_active = True
+                print(f"  🔄 {role.name}")
             else:
-                new = Role(
+                session.add(Role(
                     name=role.name,
                     group_name=role.group_name,
                     prompt_text=role.prompt_text,
                     keywords=role.keywords,
                     tier_access=role.tier_access
-                )
-                session.add(new)
-                print(f"  ➕ Добавлена: {role.name}")
+                ))
+                print(f"  ➕ {role.name}")
         
+        # Upsert правил
         for rule in parsed.rules:
-            result = await session.execute(
-                select(Rule).where(Rule.number == rule.number)
-            )
+            result = await session.execute(select(Rule).where(Rule.number == rule.number))
             existing = result.scalar_one_or_none()
             if existing:
                 existing.text = rule.text
             else:
                 session.add(Rule(number=rule.number, text=rule.text))
         
+        # Upsert команд
         for cmd in parsed.commands:
-            result = await session.execute(
-                select(Command).where(Command.name == cmd.name)
-            )
+            result = await session.execute(select(Command).where(Command.name == cmd.name))
             existing = result.scalar_one_or_none()
             if existing:
                 existing.description = cmd.description
@@ -86,7 +83,7 @@ async def test():
                 ))
         
         await session.commit()
-        print("✅ Готово! Проверь /roles и /commands в боте.")
+        print(f"\n✅ Готово! Проверь /roles и /commands в боте.")
 
 
 if __name__ == "__main__":
