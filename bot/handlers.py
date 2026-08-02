@@ -114,8 +114,26 @@ async def cmd_setkey(message: types.Message, state: FSMContext):
 @router.message(Command(commands="roles"))
 async def cmd_roles(message: types.Message):
     user = await get_or_create_user(message)
+    from config.settings import settings
+    
     async with async_session() as session:
-        # Фильтруем роли по тарифу пользователя
+        # ← НОВОЕ: Владелец видит ВСЕ роли (для отладки)
+        if message.from_user.id == settings.owner_id:
+            result = await session.execute(
+                select(Role).where(Role.is_active == True).order_by(Role.id)
+            )
+            roles = result.scalars().all()
+            
+            text = f"🎭 <b>ВСЕ РОЛИ (режим владельца):</b>\n\n"
+            for role in roles:
+                icon = "🆓" if role.tier_access == "lite" else ("⚡" if role.tier_access == "pro" else "💎")
+                text += f"{icon} <b>{role.name}</b> [{role.group_name}]\n"
+                text += f"   🔑 {role.keywords[:60]}...\n\n"
+            text += f"📊 Всего: {len(roles)} ролей"
+            await message.answer(text)
+            return
+        
+        # Обычная логика для пользователей
         if user.tariff == "lite":
             allowed = ["lite"]
         elif user.tariff == "pro":
