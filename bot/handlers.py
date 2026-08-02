@@ -53,10 +53,36 @@ async def get_or_create_user(message: types.Message):
 
 @router.message(Command(commands="start"))
 async def cmd_start(message: types.Message, state: FSMContext):
-    # Очищаем любое состояние (на случай, если пользователь застрял в диалоге)
     await state.clear()
     
     user = await get_or_create_user(message)
+    
+    # ← НОВОЕ: если владелец — показываем админ-кнопку под полем ввода
+    from config.settings import settings
+    if message.from_user.id == settings.owner_id:
+        from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+        admin_kb = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="🔧 Админ-меню")]],
+            resize_keyboard=True
+        )
+        await message.answer(
+            f"👋 <b>Привет, владелец!</b>\n\n"
+            f"🎫 Твой тариф: <b>{user.tariff.upper()}</b>\n\n"
+            f"📋 Команды:\n"
+            f"/start — начало\n"
+            f"/help — справка\n"
+            f"/register — регистрация\n"
+            f"/roles — доступные роли\n"
+            f"/commands — доступные команды\n"
+            f"/setkey — добавить свой API-ключ (BYOK)\n"
+            f"/admin — настройка тарифов\n"
+            f"/upload_prompt — загрузить промпт\n"
+            f"/settariff — сменить свой тариф\n\n"
+            f"💡 Просто напиши сообщение — и я отвечу через AI.",
+            reply_markup=admin_kb
+        )
+        return
+    
     await message.answer(
         f"👋 <b>Привет, {user.first_name or 'друг'}!</b>\n\n"
         f"🎫 Твой тариф: <b>{user.tariff.upper()}</b>\n\n"
@@ -118,21 +144,41 @@ async def cmd_roles(message: types.Message):
     from config.settings import settings
     
     async with async_session() as session:
-        if message.from_user.id == settings.owner_id:
+               # Обычная логика для пользователей
+        # ← НОВОЕ: фильтруем через RoleTariffAccess, если админ уже настраивал
+        access_result = await session.execute(
+            select(RoleTariffAccess).where(RoleTariffAccess.tariff == user.tariff).limit(1)
+        )
+        has_records = access_result.scalar_one_or_none() is not None
+        
+        if has_records:
             result = await session.execute(
-                select(Role).where(Role.is_active == True).order_by(Role.id)
+                select(Role).join(
+                    RoleTariffAccess,
+                    Role.id == RoleTariffAccess.role_id
+                ).where(
+                    Role.is_active == True,
+                    RoleTariffAccess.tariff == user.tariff,
+                    RoleTariffAccess.access == True
+                )
             )
             roles = result.scalars().all()
-            
-            chunk_size = 15
-            for i in range(0, len(roles), chunk_size):
-                chunk = roles[i:i+chunk_size]
-                text = f"🎭 <b>Роли {i+1}-{i+len(chunk)} из {len(roles)}</b>\n\n"
-                for role in chunk:
-                    icon = "🆓" if role.tier_access == "lite" else ("⚡" if role.tier_access == "pro" else "💎")
-                    text += f"{icon} <b>{role.name}</b> [{role.group_name}]\n"
-                    text += f"   🔑 {role.keywords[:50]}...\n\n"
-                await message.answer(text)
+        else:
+            # Fallback на старую логику (если админ ещё не настраивал)
+            if user.tariff == "lite":
+                allowed = ["lite"]
+            elif user.tariff == "pro":
+                allowed = ["lite", "pro"]
+            else:
+                allowed = ["lite", "pro", "business"]
+                
+            result = await session.execute(
+                select(Role).where(
+                    Role.is_active == True,
+                    Role.tier_access.in_(allowed)
+                )
+            )
+            roles = result.scalars().all()
             return
         
         if user.tariff == "lite":
@@ -395,6 +441,37 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
                 added_cmds += 1
         
         await session.commit()
+
+            # --- СОЗДАЁМ ДЕФОЛТНЫЕ ДОСТУПЫ ДЛЯ РОЛЕЙ (если админ ещё не настраивал) ---
+        for role in parsed.roles:
+            result = await session.execute(select(Role).where(Role.name == role.name))
+            db_role = result.scalar_one()
+            
+            for t in ["lite", "pro", "business"]:
+                exists = await session.execute(
+                    select(RoleTariffAccess).where(
+                        RoleTariffAccess.role_id == db_role.id,
+                        RoleTariffAccess.tariff == t
+                    )
+                )
+                if not exists.scalar_one_or_none():
+                    # Дефолт: business = True, остальное по tier_access
+                    default_access = False
+                    if t == "business":
+                        default_access = True
+                    elif t == "pro" and db_role.tier_access in ("lite", "pro"):
+                        default_access = True
+                    elif t == "lite" and db_role.tier_access == "lite":
+                        default_access = True
+                    
+                    session.add(RoleTariffAccess(
+                        role_id=db_role.id,
+                        tariff=t,
+                        access=default_access
+                    ))
+        await session.commit()
+        # --- КОНЕЦ ---
+
     
     # ← НОВОЕ: очищаем состояние после обработки
     await state.clear()
@@ -418,9 +495,6 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
 
 @router.message(Command(commands="admin"))
 async def cmd_admin(message: types.Message):
-    """
-    Главное меню админ-панели. Только для владельца.
-    """
     from config.settings import settings
     
     if message.from_user.id != settings.owner_id:
@@ -428,16 +502,14 @@ async def cmd_admin(message: types.Message):
         return
     
     builder = InlineKeyboardBuilder()
-    builder.button(text="🆓 Lite", callback_data="admin:tariff:lite")
-    builder.button(text="⚡ Pro", callback_data="admin:tariff:pro")
-    builder.button(text="💎 Business", callback_data="admin:tariff:business")
-    builder.adjust(3)
+    builder.button(text="⚙️ Фичи тарифа", callback_data="admin:section:features")
+    builder.button(text="🎭 Роли тарифа", callback_data="admin:section:roles")
+    builder.button(text="📋 Админ-команды", callback_data="admin:commands")
+    builder.adjust(1)
     
     await message.answer(
         "⚙️ <b>Админ-панель</b>\n\n"
-        "Здесь ты можешь настроить, какие функции доступны в каждом тарифе "
-        "и какие лимиты установлены.\n\n"
-        "Выбери тариф:",
+        "Выбери раздел:",
         reply_markup=builder.as_markup()
     )
 
@@ -803,3 +875,155 @@ async def smart_handler(message: types.Message):
         await message.answer(f"{source_icon} <b>Ответ AI:</b>\n\n{answer}{roles_info}")
     else:
         await message.answer(f"❌ <b>Ошибка:</b>\n\n{answer}")
+
+
+@router.message(F.text == "🔧 Админ-меню")
+async def admin_menu_button(message: types.Message):
+    """Обрабатывает нажатие reply-кнопки Админ-меню (только владелец)"""
+    from config.settings import settings
+    if message.from_user.id != settings.owner_id:
+        return
+    await cmd_admin(message)
+
+
+# ============ АДМИН: ВЫБОР РАЗДЕЛА ============
+
+@router.callback_query(F.data == "admin:section:features")
+async def admin_section_features(callback: types.CallbackQuery):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🆓 Lite", callback_data="admin:tariff:lite")
+    builder.button(text="⚡ Pro", callback_data="admin:tariff:pro")
+    builder.button(text="💎 Business", callback_data="admin:tariff:business")
+    builder.button(text="← Назад", callback_data="admin:menu")
+    builder.adjust(3)
+    
+    await callback.message.edit_text(
+        "⚙️ <b>Настройка фич тарифа</b>\n\nВыбери тариф:",
+        reply_markup=builder.as_markup()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:section:roles")
+async def admin_section_roles(callback: types.CallbackQuery):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🆓 Lite", callback_data="admin:roles:tariff:lite:page:0")
+    builder.button(text="⚡ Pro", callback_data="admin:roles:tariff:pro:page:0")
+    builder.button(text="💎 Business", callback_data="admin:roles:tariff:business:page:0")
+    builder.button(text="← Назад", callback_data="admin:menu")
+    builder.adjust(3)
+    
+    await callback.message.edit_text(
+        "🎭 <b>Настройка ролей по тарифам</b>\n\n"
+        "Здесь ты решаешь, какие роли доступны в каждом тарифе.\n\n"
+        "Выбери тариф:",
+        reply_markup=builder.as_markup()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:commands")
+async def admin_commands_list(callback: types.CallbackQuery):
+    text = (
+        "📋 <b>Админ-команды</b>\n\n"
+        "/admin — главное меню\n"
+        "/upload_prompt — загрузить новый промпт\n"
+        "/settariff [lite/pro/business] — сменить свой тариф\n"
+        "/setkey — ввести BYOK-ключ\n\n"
+        "⚠️ Все эти команды доступны только тебе (владельцу)."
+    )
+    builder = InlineKeyboardBuilder()
+    builder.button(text="← Назад", callback_data="admin:menu")
+    
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+# ============ АДМИН: УПРАВЛЕНИЕ РОЛЯМИ ============
+
+@router.callback_query(F.data.startswith("admin:roles:tariff:"))
+async def admin_roles_list(callback: types.CallbackQuery):
+    parts = callback.data.split(":")
+    tariff = parts[3]
+    page = int(parts[5]) if len(parts) > 5 else 0
+    
+    async with async_session() as session:
+        result = await session.execute(
+            select(Role).where(Role.is_active == True).order_by(Role.id)
+        )
+        all_roles = result.scalars().all()
+        
+        access_result = await session.execute(
+            select(RoleTariffAccess).where(RoleTariffAccess.tariff == tariff)
+        )
+        access_map = {a.role_id: a.access for a in access_result.scalars().all()}
+    
+    icon = "🆓" if tariff == "lite" else "⚡" if tariff == "pro" else "💎"
+    per_page = 10
+    total_pages = (len(all_roles) + per_page - 1) // per_page
+    start = page * per_page
+    end = start + per_page
+    page_roles = all_roles[start:end]
+    
+    text = f"{icon} <b>Роли для тарифа {tariff.upper()}</b> (стр. {page+1}/{total_pages})\n\n"
+    text += "Нажми на роль, чтобы переключить доступ:\n\n"
+    
+    builder = InlineKeyboardBuilder()
+    
+    for role in page_roles:
+        access = access_map.get(role.id, False)
+        status = "✅" if access else "❌"
+        btn_text = f"{status} {role.name[:35]}"
+        builder.button(
+            text=btn_text,
+            callback_data=f"admin:role:toggle:{tariff}:{role.id}"
+        )
+    
+    builder.adjust(1)
+    
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(("← Назад", f"admin:roles:tariff:{tariff}:page:{page-1}"))
+    if page < total_pages - 1:
+        nav_buttons.append(("Вперёд →", f"admin:roles:tariff:{tariff}:page:{page+1}"))
+    nav_buttons.append(("← К тарифам", "admin:section:roles"))
+    
+    for text_btn, data in nav_buttons:
+        builder.button(text=text_btn, callback_data=data)
+    
+    builder.adjust(2, 1)
+    
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:role:toggle:"))
+async def admin_role_toggle(callback: types.CallbackQuery):
+    parts = callback.data.split(":")
+    tariff = parts[3]
+    role_id = int(parts[4])
+    
+    async with async_session() as session:
+        result = await session.execute(
+            select(RoleTariffAccess).where(
+                RoleTariffAccess.role_id == role_id,
+                RoleTariffAccess.tariff == tariff
+            )
+        )
+        access = result.scalar_one_or_none()
+        
+        if access:
+            access.access = not access.access
+            new_status = access.access
+        else:
+            session.add(RoleTariffAccess(role_id=role_id, tariff=tariff, access=True))
+            new_status = True
+        
+        await session.commit()
+    
+    status_text = "включена" if new_status else "выключена"
+    await callback.answer(f"Роль {status_text} для {tariff}")
+    
+    # Обновляем список (редирект на страницу 0 для простоты)
+    callback.data = f"admin:roles:tariff:{tariff}:page:0"
+    await admin_roles_list(callback)
