@@ -1,5 +1,5 @@
 # ============================================
-# ПАРСЕР MARKDOWN-ФАЙЛА С РОЛЯМИ
+# ПАРСЕР MARKDOWN-ФАЙЛА С РОЛЯМИ (v2 — исправлено)
 # ============================================
 
 import re
@@ -81,7 +81,6 @@ class PromptParser:
     
     def _parse_constitution(self):
         """Ищет нумерованный список правил (1. Текст)"""
-        # Ищем секцию "КОНСТИТУЦИЯ" или "ПРАВИЛА"
         in_constitution = False
         constitution_lines = []
         
@@ -141,7 +140,6 @@ class PromptParser:
                 j = i + 1
                 while j < len(self.lines):
                     next_line = self.lines[j]
-                    # Следующая роль или новый ## заголовок = конец блока
                     if role_pattern.match(next_line) or (
                         next_line.startswith("## ") and not next_line.startswith("###")
                     ):
@@ -159,65 +157,55 @@ class PromptParser:
                 i += 1
     
     def _parse_role_block(self, name: str, lines: List[str]) -> ParsedRole:
-        """Разбирает текстовый блок одной роли"""
+        """Разбирает текстовый блок одной роли (ИСПРАВЛЕННАЯ ВЕРСИЯ)"""
         role = ParsedRole(name=name)
         
         # Собираем весь текст блока
         block_text = "\n".join(lines)
         
-        # --- Ищем метаданные ---
+        # ← ИСПРАВЛЕНИЕ 1: Очищаем markdown-звёздочки перед поиском метаданных
+        clean_text = re.sub(r'\*\*', '', block_text)
         
-        # Группа: **Группа:** CODE или Группа: CODE
-        group_match = re.search(r'(?:\*\*)?Группа(?:\*\*)?\s*[:：]\s*(\w+)', block_text, re.IGNORECASE)
+        # --- Ищем метаданные в очищенном тексте ---
+        
+        # Группа: CODE
+        group_match = re.search(r'Группа\s*[:：]\s*(\w+)', clean_text, re.IGNORECASE)
         if group_match:
             role.group_name = group_match.group(1).upper()
         
-        # Тариф: **Тариф:** pro или Тариф: pro
-        tier_match = re.search(r'(?:\*\*)?Тариф(?:\*\*)?\s*[:：]\s*(lite|pro|business)', block_text, re.IGNORECASE)
+        # Тариф: pro / business / lite
+        tier_match = re.search(r'Тариф\s*[:：]\s*(lite|pro|business)', clean_text, re.IGNORECASE)
         if tier_match:
             role.tier_access = tier_match.group(1).lower()
         
-        # Ключевые слова: **Ключевые слова:** слово1, слово2
+        # Ключевые слова: слово1, слово2
         kw_match = re.search(
-            r'(?:\*\*)?Ключевые\s*слова(?:\*\*)?\s*[:：]\s*(.+?)(?:\n|$)',
-            block_text, re.IGNORECASE | re.DOTALL
+            r'Ключевые\s*слова\s*[:：]\s*(.+?)(?:\n|$)',
+            clean_text, re.IGNORECASE | re.DOTALL
         )
         if kw_match:
             role.keywords = kw_match.group(1).strip()
         
-        # --- Ищем текст промпта ---
-        # Убираем метаданные из текста, оставляем только "тело" промпта
+        # --- Ищем текст промпта (тело роли) ---
         prompt_lines = []
-        in_prompt = False
         
         for line in lines:
             stripped = line.strip()
             
-            # Пропускаем пустые и метаданные
             if not stripped:
-                if in_prompt:
-                    prompt_lines.append(line)
                 continue
             
-            # Пропускаем строки с метаданными
-            if re.match(r'^(?:\*\*)?(?:Группа|Тариф|Ключевые\s*слова)(?:\*\*)?\s*[:：]', stripped, re.IGNORECASE):
+            # ← ИСПРАВЛЕНИЕ 2: Пропускаем метаданные (даже с markdown **)
+            if re.match(r'^\*?\*?(?:Группа|Тариф|Ключевые\s*слова)\*?\*?\s*[:：]', stripped, re.IGNORECASE):
                 continue
             
-            # Пропускаем разделители (---)
+            # Пропускаем разделители
             if stripped == '---':
                 continue
             
-            in_prompt = True
             prompt_lines.append(line)
         
         role.prompt_text = "\n".join(prompt_lines).strip()
-        
-        # Если keywords не найдены в метаданных — попробуем извлечь из текста
-        if not role.keywords:
-            # Ищем строки типа "Keywords: ..." или просто список через запятую в начале
-            kw_alt = re.search(r'(?:keywords|ключи)\s*[:：]\s*(.+?)(?:\n|$)', block_text, re.IGNORECASE)
-            if kw_alt:
-                role.keywords = kw_alt.group(1).strip()
         
         return role
     
@@ -225,14 +213,12 @@ class PromptParser:
     
     def _parse_commands_table(self):
         """Ищет markdown-таблицы с командами"""
-        # Ищем строки, похожие на таблицы (начинаются с |)
         table_lines = []
         in_table = False
         
         for line in self.lines:
             stripped = line.strip()
             
-            # Начало таблицы
             if stripped.startswith('|') and ('команда' in stripped.lower() or 'кластер' in stripped.lower()):
                 in_table = True
             
@@ -240,10 +226,8 @@ class PromptParser:
                 if stripped.startswith('|'):
                     table_lines.append(stripped)
                 else:
-                    # Конец таблицы
                     break
         
-        # Пропускаем заголовок и разделитель (первые 2 строки)
         for line in table_lines[2:]:
             cells = [c.strip() for c in line.split('|')[1:-1]]
             if len(cells) >= 3:
@@ -273,7 +257,6 @@ class PromptParser:
                 name = "!" + match.group(1).strip()
                 desc = match.group(2).strip()
                 
-                # Проверяем, не добавили ли уже
                 if not any(c.name == name for c in self.result.commands):
                     self.result.commands.append(ParsedCommand(
                         name=name,
@@ -282,7 +265,7 @@ class PromptParser:
                     logger.debug(f"  ⌨️ Команда {name} (inline)")
 
 
-# ---------- УДОБНАЯ ФУНКЦИЯ-ОБЁРТКА ----------
+# ---------- УДОБНЫЕ ФУНКЦИИ-ОБЁРТКИ ----------
 
 def parse_prompt_file(file_path: str) -> ParsedPrompt:
     """Читает файл и парсит его"""
