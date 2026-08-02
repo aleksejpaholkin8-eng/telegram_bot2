@@ -230,7 +230,7 @@ async def cmd_commands(message: types.Message):
         )
         commands = result.scalars().all()
 
-               chunk_size = 20
+        chunk_size = 20
         if len(commands) == 0:
             await message.answer(f"⌨️ <b>Команды (тариф: {user.tariff.upper()}):</b>\n\nНет доступных команд.")
             return
@@ -865,7 +865,7 @@ async def smart_handler(message: types.Message):
         system_prompt=system_prompt
     )
 
-    # --- Показываем ответ и обновляем счётчик токенов ---
+       # --- Показываем ответ и обновляем счётчик токенов ---
     if success:
         # ← НОВОЕ: примерно считаем токены и сохраняем в БД
         try:
@@ -880,18 +880,16 @@ async def smart_handler(message: types.Message):
                     counters["daily_tokens"] = counters.get("daily_tokens", 0) + tokens_used
                     us.counters = counters
                     await session.commit()
-        except Exception as e:
-            # Если не удалось сохранить счётчик — не ломаем ответ пользователю
+        except Exception:
             pass
         
-                source_icon = "🔑" if source == "byok" else "⚡"
+        source_icon = "🔑" if source == "byok" else "⚡"
         roles_info = f"\n\n<i>🎭 Активные роли: {roles_names}</i>" if selected_roles else ""
         
         # ← НОВОЕ: разбиваем длинный ответ на части (лимит Telegram 4096)
         full_text = f"{source_icon} <b>Ответ AI:</b>\n\n{answer}{roles_info}"
         
         if len(full_text) > 4000:
-            # Отправляем answer без префикса, разбитым на части
             parts = [answer[i:i+4000] for i in range(0, len(answer), 4000)]
             for idx, part in enumerate(parts):
                 prefix = f"{source_icon} <b>Ответ AI (часть {idx+1}/{len(parts)}):</b>\n\n"
