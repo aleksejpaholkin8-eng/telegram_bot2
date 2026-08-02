@@ -1,8 +1,6 @@
 # ============================================
-# ОБРАБОТЧИКИ (ЭТАП 3 — AI + ТАРИФЫ + BYOK)
+# ОБРАБОТЧИКИ (ЭТАП 5.1 — Исправлено шифрование)
 # ============================================
-
-import base64
 
 from aiogram import Router, types, F
 from aiogram.filters import Command
@@ -17,6 +15,7 @@ from services.llm_service import ask_llm, get_api_key
 from services.tariff_service import check_token_limit
 from services.role_router import select_roles
 from services.prompt_builder import build_system_prompt
+from services.encryption import encrypt_key  # ← ИСПРАВЛЕНИЕ: используем нормальное шифрование
 
 router = Router()
 
@@ -24,6 +23,10 @@ router = Router()
 # ============ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ============
 
 async def get_or_create_user(message: types.Message):
+    """
+    Находит пользователя в БД или создаёт нового.
+    Тариф берётся из настроек (lite по умолчанию).
+    """
     async with async_session() as session:
         result = await session.execute(
             select(User).where(User.telegram_id == message.from_user.id)
@@ -36,16 +39,13 @@ async def get_or_create_user(message: types.Message):
                 username=message.from_user.username,
                 first_name=message.from_user.first_name,
                 last_name=message.from_user.last_name,
-                tariff="lite"  # ← это при создании
+                tariff="lite"  # По умолчанию — Lite
             )
             session.add(user)
             await session.commit()
         
-        # ====== ВРЕМЕННО: принудительно меняем тариф на pro ======
-        if user.tariff != "pro":
-            user.tariff = "pro"
-            await session.commit()
-        # =========================================================
+        # ❌ УБРАНО: принудительная смена тарифа на pro
+        # Если нужно протестировать Pro — меняй тариф вручную через БД или /admin
         
         return user
 
@@ -115,10 +115,18 @@ async def cmd_setkey(message: types.Message, state: FSMContext):
 async def cmd_roles(message: types.Message):
     user = await get_or_create_user(message)
     async with async_session() as session:
+        # Фильтруем роли по тарифу пользователя
+        if user.tariff == "lite":
+            allowed = ["lite"]
+        elif user.tariff == "pro":
+            allowed = ["lite", "pro"]
+        else:
+            allowed = ["lite", "pro", "business"]
+            
         result = await session.execute(
             select(Role).where(
                 Role.is_active == True,
-                Role.tier_access.in_(["lite", user.tariff])
+                Role.tier_access.in_(allowed)
             )
         )
         roles = result.scalars().all()
@@ -136,9 +144,16 @@ async def cmd_roles(message: types.Message):
 async def cmd_commands(message: types.Message):
     user = await get_or_create_user(message)
     async with async_session() as session:
+        if user.tariff == "lite":
+            allowed = ["lite"]
+        elif user.tariff == "pro":
+            allowed = ["lite", "pro"]
+        else:
+            allowed = ["lite", "pro", "business"]
+            
         result = await session.execute(
             select(CommandModel).where(
-                CommandModel.tier_access.in_(["lite", user.tariff])
+                CommandModel.tier_access.in_(allowed)
             )
         )
         commands = result.scalars().all()
@@ -216,7 +231,7 @@ async def process_confirm_invalid(message: types.Message):
     await message.answer("Не понял. Напиши <b>да</b> или <b>нет</b>.")
 
 
-# ============ FSM: ВВОД КЛЮЧА BYOK ============
+# ============ FSM: ВВОД КЛЮЧА BYOK (ИСПРАВЛЕННОЕ ШИФРОВАНИЕ) ============
 
 @router.message(ByokInput.waiting_for_key)
 async def process_byok_key(message: types.Message, state: FSMContext):
@@ -237,8 +252,17 @@ async def process_byok_key(message: types.Message, state: FSMContext):
         )
         return
 
-    # Шифруем
-    encrypted = base64.b64encode(key.encode()).decode()
+    # ← ИСПРАВЛЕНИЕ: используем Fernet-шифрование вместо base64
+    try:
+        encrypted = encrypt_key(key)
+    except ValueError as e:
+        await message.answer(
+            f"❌ <b>Ошибка шифрования:</b>\n\n"
+            f"{str(e)}\n\n"
+            f"Администратору нужно добавить ENCRYPTION_KEY в переменные окружения."
+        )
+        await state.clear()
+        return
 
     async with async_session() as session:
         # Удаляем старый ключ этого провайдера
@@ -299,13 +323,17 @@ async def smart_handler(message: types.Message):
         )
         return
 
-    # --- Проверяем наличие ключа ---
-    api_key, source = await get_api_key(message.from_user.id, "groq")
+    # --- Проверяем наличие ключа (для модели по умолчанию) ---
+    # Определяем провайдера из дефолтной модели
+    default_model = "groq/llama-3.3-70b-versatile"
+    provider = default_model.split("/")[0]
+    
+    api_key, source = await get_api_key(message.from_user.id, provider=provider)
     if not api_key:
         await message.answer(
             f"🔑 <b>Нет API-ключа</b>\n\n"
             f"Варианты:\n"
-            f"1. Владелец бота ещё не добавил GROQ_API_KEY в Railway Variables\n"
+            f"1. Владелец бота ещё не добавил {provider.upper()}_API_KEY в Railway Variables\n"
             f"2. Добавь свой ключ: /setkey (BYOK)\n\n"
             f"Вы написали: {message.text}"
         )
@@ -315,7 +343,13 @@ async def smart_handler(message: types.Message):
     wait_msg = await message.answer("⏳ Анализирую запрос и выбираю роли...")
     
     # 1. Роутер выбирает роли по keywords
-    selected_roles = await select_roles(message.from_user.id, message.text)
+    # Определяем max_roles из тарифа
+    from services.tariff_service import check_feature_access
+    _, max_roles = await check_feature_access(user.tariff, "max_roles")
+    if max_roles == 0:
+        max_roles = 5  # fallback
+        
+    selected_roles = await select_roles(message.from_user.id, message.text, max_roles=max_roles)
     
     # 2. Строим динамический системный промпт
     system_prompt = await build_system_prompt(message.from_user.id, selected_roles)
@@ -331,7 +365,7 @@ async def smart_handler(message: types.Message):
     answer, success = await ask_llm(
         prompt=message.text,
         user_id=message.from_user.id,
-        model="groq/llama-3.3-70b-versatile",
+        model=default_model,
         system_prompt=system_prompt
     )
 
@@ -342,4 +376,3 @@ async def smart_handler(message: types.Message):
         await message.answer(f"{source_icon} <b>Ответ AI:</b>\n\n{answer}{roles_info}")
     else:
         await message.answer(f"❌ <b>Ошибка:</b>\n\n{answer}")
-        
