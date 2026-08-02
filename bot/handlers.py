@@ -196,13 +196,20 @@ async def cmd_roles(message: types.Message):
         )
         roles = result.scalars().all()
 
-        text = f"🎭 <b>Роли (тариф: {user.tariff.upper()}):</b>\n\n"
-        for role in roles:
-            icon = "🆓" if role.tier_access == "lite" else "💎"
-            text += f"{icon} <b>{role.name}</b>\n"
-            text += f"   🔑 {role.keywords}\n\n"
-        text += f"📊 Всего ролей: {len(roles)}"
-        await message.answer(text)
+                # ← НОВОЕ: разбиваем на чанки, чтобы не превысить лимит 4096 символов
+        chunk_size = 15
+        if len(roles) == 0:
+            await message.answer(f"🎭 <b>Роли (тариф: {user.tariff.upper()}):</b>\n\nНет доступных ролей.")
+            return
+            
+        for i in range(0, len(roles), chunk_size):
+            chunk = roles[i:i+chunk_size]
+            text = f"🎭 <b>Роли {i+1}-{i+len(chunk)} из {len(roles)}</b> (тариф: {user.tariff.upper()})\n\n"
+            for role in chunk:
+                icon = "🆓" if role.tier_access == "lite" else "💎"
+                text += f"{icon} <b>{role.name}</b>\n"
+                text += f"   🔑 {role.keywords}\n\n"
+            await message.answer(text)
 
 
 @router.message(Command(commands="commands"))
@@ -223,12 +230,19 @@ async def cmd_commands(message: types.Message):
         )
         commands = result.scalars().all()
 
-        text = f"⌨️ <b>Команды (тариф: {user.tariff.upper()}):</b>\n\n"
-        for cmd in commands:
-            icon = "✅" if cmd.tier_access == "lite" else "🔒"
-            text += f"{icon} <b>{cmd.name}</b> — {cmd.description}\n"
-        await message.answer(text)
-
+               chunk_size = 20
+        if len(commands) == 0:
+            await message.answer(f"⌨️ <b>Команды (тариф: {user.tariff.upper()}):</b>\n\nНет доступных команд.")
+            return
+            
+        for i in range(0, len(commands), chunk_size):
+            chunk = commands[i:i+chunk_size]
+            text = f"⌨️ <b>Команды {i+1}-{i+len(chunk)} из {len(commands)}</b> (тариф: {user.tariff.upper()})\n\n"
+            for cmd in chunk:
+                icon = "✅" if cmd.tier_access == "lite" else "🔒"
+                text += f"{icon} <b>{cmd.name}</b> — {cmd.description}\n"
+            await message.answer(text)
+            
 
 @router.message(Command(commands="settariff"))
 async def cmd_settariff(message: types.Message):
@@ -870,9 +884,21 @@ async def smart_handler(message: types.Message):
             # Если не удалось сохранить счётчик — не ломаем ответ пользователю
             pass
         
-        source_icon = "🔑" if source == "byok" else "⚡"
+                source_icon = "🔑" if source == "byok" else "⚡"
         roles_info = f"\n\n<i>🎭 Активные роли: {roles_names}</i>" if selected_roles else ""
-        await message.answer(f"{source_icon} <b>Ответ AI:</b>\n\n{answer}{roles_info}")
+        
+        # ← НОВОЕ: разбиваем длинный ответ на части (лимит Telegram 4096)
+        full_text = f"{source_icon} <b>Ответ AI:</b>\n\n{answer}{roles_info}"
+        
+        if len(full_text) > 4000:
+            # Отправляем answer без префикса, разбитым на части
+            parts = [answer[i:i+4000] for i in range(0, len(answer), 4000)]
+            for idx, part in enumerate(parts):
+                prefix = f"{source_icon} <b>Ответ AI (часть {idx+1}/{len(parts)}):</b>\n\n"
+                suffix = roles_info if idx == len(parts) - 1 else ""
+                await message.answer(f"{prefix}{part}{suffix}")
+        else:
+            await message.answer(full_text)
     else:
         await message.answer(f"❌ <b>Ошибка:</b>\n\n{answer}")
 
