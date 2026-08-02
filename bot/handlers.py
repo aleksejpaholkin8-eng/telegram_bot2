@@ -1,21 +1,23 @@
 # ============================================
-# ОБРАБОТЧИКИ (ЭТАП 5.1 — Исправлено шифрование)
+# ОБРАБОТЧИКИ (ЭТАП 5.4 — /admin панель + багфиксы)
 # ============================================
 
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.states import UserRegistration, ByokInput
+from bot.states import UserRegistration, ByokInput, UploadPrompt, AdminEditLimit
 from db.database import async_session
-from db.models import User, Role, Command as CommandModel, UserState, UserApiKey
+from db.models import User, Role, Command as CommandModel, UserState, UserApiKey, TariffFeature
 from sqlalchemy import select
 
 from services.llm_service import ask_llm, get_api_key
-from services.tariff_service import check_token_limit
+from services.tariff_service import check_token_limit, check_feature_access
 from services.role_router import select_roles
-from services.prompt_builder import build_system_prompt
-from services.encryption import encrypt_key  # ← ИСПРАВЛЕНИЕ: используем нормальное шифрование
+from services.prompt_builder import build_system_prompt, count_tokens
+from services.encryption import encrypt_key
 
 router = Router()
 
@@ -39,21 +41,21 @@ async def get_or_create_user(message: types.Message):
                 username=message.from_user.username,
                 first_name=message.from_user.first_name,
                 last_name=message.from_user.last_name,
-                tariff="lite"  # По умолчанию — Lite
+                tariff="lite"
             )
             session.add(user)
             await session.commit()
         
-        # ❌ УБРАНО: принудительная смена тарифа на pro
-        # Если нужно протестировать Pro — меняй тариф вручную через БД или /admin
-        
         return user
 
 
-# ============ КОМАНДЫ ============
+# ============ ОБЫЧНЫЕ КОМАНДЫ (без изменений) ============
 
 @router.message(Command(commands="start"))
-async def cmd_start(message: types.Message):
+async def cmd_start(message: types.Message, state: FSMContext):
+    # Очищаем любое состояние (на случай, если пользователь застрял в диалоге)
+    await state.clear()
+    
     user = await get_or_create_user(message)
     await message.answer(
         f"👋 <b>Привет, {user.first_name or 'друг'}!</b>\n\n"
@@ -98,7 +100,6 @@ async def cmd_register(message: types.Message, state: FSMContext):
 
 @router.message(Command(commands="setkey"))
 async def cmd_setkey(message: types.Message, state: FSMContext):
-    """Запускает диалог ввода BYOK-ключа"""
     await state.set_state(ByokInput.waiting_for_key)
     await message.answer(
         "🔑 <b>Ввод API-ключа (BYOK)</b>\n\n"
@@ -117,14 +118,12 @@ async def cmd_roles(message: types.Message):
     from config.settings import settings
     
     async with async_session() as session:
-        # ← ВЛАДЕЛЕЦ: показываем все роли с пагинацией
         if message.from_user.id == settings.owner_id:
             result = await session.execute(
                 select(Role).where(Role.is_active == True).order_by(Role.id)
             )
             roles = result.scalars().all()
             
-            # Разбиваем на чанки по 15 ролей (чтобы влезло в 4096 символов)
             chunk_size = 15
             for i in range(0, len(roles), chunk_size):
                 chunk = roles[i:i+chunk_size]
@@ -136,7 +135,6 @@ async def cmd_roles(message: types.Message):
                 await message.answer(text)
             return
         
-        # Обычная логика для пользователей
         if user.tariff == "lite":
             allowed = ["lite"]
         elif user.tariff == "pro":
@@ -188,19 +186,12 @@ async def cmd_commands(message: types.Message):
 
 @router.message(Command(commands="settariff"))
 async def cmd_settariff(message: types.Message):
-    """
-    Команда только для владельца бота.
-    Меняет тариф текущего пользователя.
-    Формат: /settariff pro
-    """
     from config.settings import settings
     
-    # Проверяем, что команду вызвал владелец
     if message.from_user.id != settings.owner_id:
         await message.answer("⛔ Эта команда только для владельца бота.")
         return
     
-    # Парсим аргумент (lite / pro / business)
     args = message.text.split()
     if len(args) < 2:
         await message.answer(
@@ -217,7 +208,6 @@ async def cmd_settariff(message: types.Message):
         await message.answer("❌ Неверный тариф. Доступны: lite, pro, business")
         return
     
-    # Меняем тариф в БД
     async with async_session() as session:
         result = await session.execute(
             select(User).where(User.telegram_id == message.from_user.id)
@@ -240,19 +230,18 @@ async def cmd_settariff(message: types.Message):
     )
 
 
-# ============ КОМАНДА /upload_prompt (ТОЛЬКО ДЛЯ ВЛАДЕЛЬЦА) ============
+# ============ /upload_prompt (ИЗМЕНЕНО — добавлен FSM) ============
 
 @router.message(Command(commands="upload_prompt"))
-async def cmd_upload_prompt(message: types.Message):
-    """
-    Запускает процесс загрузки нового промпта.
-    Только для владельца. Бот ждёт файл .md или текст.
-    """
+async def cmd_upload_prompt(message: types.Message, state: FSMContext):
     from config.settings import settings
     
     if message.from_user.id != settings.owner_id:
         await message.answer("⛔ Эта команда только для владельца бота.")
         return
+    
+    # ← НОВОЕ: ставим бота в состояние "жду файл/текст"
+    await state.set_state(UploadPrompt.waiting_for_file)
     
     await message.answer(
         "📤 <b>Загрузка нового промпта</b>\n\n"
@@ -266,22 +255,27 @@ async def cmd_upload_prompt(message: types.Message):
 
 
 @router.message(F.document)
-async def handle_document_upload(message: types.Message):
+async def handle_document_upload(message: types.Message, state: FSMContext):
     """
     Обрабатывает загруженный файл .md
+    Теперь срабатывает ТОЛЬКО если бот ждёт файл (состояние UploadPrompt).
     """
     from config.settings import settings
     from parsers.prompt_parser import parse_prompt_text
     
+    # ← НОВОЕ: проверяем, ждём ли мы файл
+    current_state = await state.get_state()
+    if current_state != UploadPrompt.waiting_for_file.state:
+        return  # Игнорируем файлы в обычном режиме
+    
     if message.from_user.id != settings.owner_id:
-        return  # Игнорируем файлы от обычных пользователей
+        return
     
     doc = message.document
     if not doc.file_name.endswith('.md'):
         await message.answer("❌ Нужен файл с расширением <code>.md</code>")
         return
     
-    # Скачиваем файл
     wait_msg = await message.answer("⏳ Скачиваю файл...")
     
     try:
@@ -290,33 +284,35 @@ async def handle_document_upload(message: types.Message):
         text = file_content.read().decode('utf-8')
     except Exception as e:
         await wait_msg.edit_text(f"❌ Ошибка скачивания: {e}")
+        await state.clear()
         return
     
     await wait_msg.edit_text("🔍 Парсю файл...")
-    await _process_prompt_text(message, text, wait_msg)
+    await _process_prompt_text(message, text, wait_msg, state)
 
 
-@router.message(F.text, ~F.text.startswith('/'))
-async def handle_text_upload(message: types.Message):
+# ← ИЗМЕНЕНО: добавлен фильтр состояния UploadPrompt.waiting_for_file
+@router.message(F.text, ~F.text.startswith('/'), UploadPrompt.waiting_for_file)
+async def handle_text_upload(message: types.Message, state: FSMContext):
     """
     Обрабатывает текст промпта, вставленный сообщением.
-    Срабатывает только если предыдущее сообщение было /upload_prompt
+    Срабатывает ТОЛЬКО если бот в состоянии waiting_for_file.
     """
     from config.settings import settings
     from parsers.prompt_parser import parse_prompt_text
     
     if message.from_user.id != settings.owner_id:
-        return  # Игнорируем
+        return
     
-    # Проверяем, что текст достаточно длинный (похож на промпт)
     if len(message.text) < 1000:
-        return  # Слишком короткий — игнорируем, это обычное сообщение
+        await message.answer("❌ Слишком короткий текст для промпта. Минимум 1000 символов.")
+        return
     
     wait_msg = await message.answer("🔍 Парсю текст...")
-    await _process_prompt_text(message, message.text, wait_msg)
+    await _process_prompt_text(message, message.text, wait_msg, state)
 
 
-async def _process_prompt_text(message: types.Message, text: str, wait_msg: types.Message):
+async def _process_prompt_text(message: types.Message, text: str, wait_msg: types.Message, state: FSMContext):
     """
     Общая логика: парсинг + дельта-обновление БД
     """
@@ -329,14 +325,15 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
         parsed = parse_prompt_text(text)
     except Exception as e:
         await wait_msg.edit_text(f"❌ Ошибка парсинга: {e}")
+        await state.clear()
         return
     
-    # Проверяем, что нашли хоть что-то
     if not parsed.roles and not parsed.rules:
         await wait_msg.edit_text(
             "❌ В файле не найдены роли или правила.\n\n"
             "Проверь формат файла. Ожидается структура Промпта 1."
         )
+        await state.clear()
         return
     
     async with async_session() as session:
@@ -347,13 +344,11 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
         added_cmds = 0
         updated_cmds = 0
         
-        # --- РОЛИ (дельта-обновление) ---
         for role in parsed.roles:
             result = await session.execute(select(Role).where(Role.name == role.name))
             existing = result.scalar_one_or_none()
             
             if existing:
-                # Обновляем, но НЕ трогаем пользовательские данные
                 existing.prompt_text = role.prompt_text
                 existing.keywords = role.keywords
                 existing.group_name = role.group_name
@@ -370,7 +365,6 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
                 ))
                 added_roles += 1
         
-        # --- ПРАВИЛА ---
         for rule in parsed.rules:
             result = await session.execute(select(Rule).where(Rule.number == rule.number))
             existing = result.scalar_one_or_none()
@@ -382,7 +376,6 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
                 session.add(Rule(number=rule.number, text=rule.text))
                 added_rules += 1
         
-        # --- КОМАНДЫ ---
         for cmd in parsed.commands:
             result = await session.execute(select(Command).where(Command.name == cmd.name))
             existing = result.scalar_one_or_none()
@@ -403,7 +396,9 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
         
         await session.commit()
     
-    # Формируем отчёт
+    # ← НОВОЕ: очищаем состояние после обработки
+    await state.clear()
+    
     report = (
         f"✅ <b>Промпт загружен!</b>\n\n"
         f"📊 <b>Статистика:</b>\n"
@@ -417,7 +412,179 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
     await wait_msg.edit_text(report)
 
 
-# ============ FSM: РЕГИСТРАЦИЯ ============
+# ============================================
+# НОВОЕ: /admin ПАНЕЛЬ (ШАГ 5.4)
+# ============================================
+
+@router.message(Command(commands="admin"))
+async def cmd_admin(message: types.Message):
+    """
+    Главное меню админ-панели. Только для владельца.
+    """
+    from config.settings import settings
+    
+    if message.from_user.id != settings.owner_id:
+        await message.answer("⛔ Эта команда только для владельца бота.")
+        return
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🆓 Lite", callback_data="admin:tariff:lite")
+    builder.button(text="⚡ Pro", callback_data="admin:tariff:pro")
+    builder.button(text="💎 Business", callback_data="admin:tariff:business")
+    builder.adjust(3)
+    
+    await message.answer(
+        "⚙️ <b>Админ-панель</b>\n\n"
+        "Здесь ты можешь настроить, какие функции доступны в каждом тарифе "
+        "и какие лимиты установлены.\n\n"
+        "Выбери тариф:",
+        reply_markup=builder.as_markup()
+    )
+
+
+@router.callback_query(F.data.startswith("admin:tariff:"))
+async def admin_show_tariff(callback: types.CallbackQuery):
+    """
+    Показывает список фич выбранного тарифа с кнопками управления.
+    """
+    tariff = callback.data.split(":")[2]
+    
+    async with async_session() as session:
+        result = await session.execute(
+            select(TariffFeature).where(TariffFeature.tariff == tariff)
+        )
+        features = result.scalars().all()
+    
+    icon = "🆓" if tariff == "lite" else "⚡" if tariff == "pro" else "💎"
+    text = f"{icon} <b>Настройки тарифа {tariff.upper()}</b>\n\n"
+    
+    builder = InlineKeyboardBuilder()
+    
+    for feat in features:
+        status = "✅ Вкл" if feat.access else "❌ Выкл"
+        text += f"<b>{feat.feature}</b>\n"
+        text += f"   Статус: {status} | Лимит: {feat.limit_value or '—'}\n\n"
+        
+        # Кнопка вкл/выкл
+        action = "off" if feat.access else "on"
+        btn_icon = "❌" if feat.access else "✅"
+        builder.button(
+            text=f"{btn_icon} {feat.feature}",
+            callback_data=f"admin:toggle:{tariff}:{feat.feature}:{action}"
+        )
+        # Кнопка изменить лимит
+        builder.button(
+            text="📝 Лимит",
+            callback_data=f"admin:limit:{tariff}:{feat.feature}"
+        )
+    
+    builder.button(text="← Назад в меню", callback_data="admin:menu")
+    builder.adjust(2)  # По 2 кнопки в ряд (вкл/выкл + лимит)
+    
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:toggle:"))
+async def admin_toggle_feature(callback: types.CallbackQuery):
+    """
+    Переключает access (вкл/выкл) для функции.
+    """
+    parts = callback.data.split(":")
+    tariff = parts[2]
+    feature = parts[3]
+    new_access = parts[4] == "on"
+    
+    async with async_session() as session:
+        result = await session.execute(
+            select(TariffFeature).where(
+                TariffFeature.tariff == tariff,
+                TariffFeature.feature == feature
+            )
+        )
+        feat = result.scalar_one_or_none()
+        
+        if feat:
+            feat.access = new_access
+            await session.commit()
+    
+    status = "включена" if new_access else "выключена"
+    await callback.answer(f"✅ {feature} {status} для {tariff}")
+    
+    # Обновляем экран
+    await admin_show_tariff(callback)
+
+
+@router.callback_query(F.data.startswith("admin:limit:"))
+async def admin_edit_limit_start(callback: types.CallbackQuery, state: FSMContext):
+    """
+    Начинает диалог изменения лимита. Переводит в состояние ожидания числа.
+    """
+    parts = callback.data.split(":")
+    tariff = parts[2]
+    feature = parts[3]
+    
+    await state.set_state(AdminEditLimit.waiting_for_value)
+    await state.update_data(tariff=tariff, feature=feature)
+    
+    await callback.message.answer(
+        f"📝 <b>Изменение лимита</b>\n\n"
+        f"Тариф: <b>{tariff.upper()}</b>\n"
+        f"Функция: <b>{feature}</b>\n\n"
+        f"Введи новое числовое значение:\n"
+        f"• <code>0</code> — нет доступа / безлимит (зависит от логики)\n"
+        f"• <code>15</code>, <code>5000</code> и т.д. — конкретный лимит\n\n"
+        f"Для отмены напиши /start"
+    )
+    await callback.answer()
+
+
+@router.message(AdminEditLimit.waiting_for_value)
+async def admin_edit_limit_finish(message: types.Message, state: FSMContext):
+    """
+    Получает число от пользователя и сохраняет новый лимит.
+    """
+    data = await state.get_data()
+    tariff = data["tariff"]
+    feature = data["feature"]
+    
+    try:
+        new_limit = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Нужно ввести целое число. Попробуй снова.")
+        return
+    
+    async with async_session() as session:
+        result = await session.execute(
+            select(TariffFeature).where(
+                TariffFeature.tariff == tariff,
+                TariffFeature.feature == feature
+            )
+        )
+        feat = result.scalar_one_or_none()
+        
+        if feat:
+            feat.limit_value = new_limit
+            await session.commit()
+    
+    await state.clear()
+    await message.answer(
+        f"✅ <b>Лимит обновлён!</b>\n\n"
+        f"Тариф: {tariff.upper()}\n"
+        f"Функция: {feature}\n"
+        f"Новый лимит: <b>{new_limit}</b>\n\n"
+        f"Проверь: /admin"
+    )
+
+
+@router.callback_query(F.data == "admin:menu")
+async def admin_back_to_menu(callback: types.CallbackQuery):
+    """Возвращает в главное меню админ-панели."""
+    await cmd_admin(callback.message)
+    await callback.answer()
+
+
+# ============ FSM: РЕГИСТРАЦИЯ (без изменений) ============
 
 @router.message(UserRegistration.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
@@ -483,13 +650,12 @@ async def process_confirm_invalid(message: types.Message):
     await message.answer("Не понял. Напиши <b>да</b> или <b>нет</b>.")
 
 
-# ============ FSM: ВВОД КЛЮЧА BYOK (ИСПРАВЛЕННОЕ ШИФРОВАНИЕ) ============
+# ============ FSM: ВВОД КЛЮЧА BYOK (без изменений) ============
 
 @router.message(ByokInput.waiting_for_key)
 async def process_byok_key(message: types.Message, state: FSMContext):
     key = message.text.strip()
 
-    # Определяем провайдера по формату ключа
     if key.startswith("xai-"):
         provider = "xai"
     elif key.startswith("gsk_"):
@@ -504,7 +670,6 @@ async def process_byok_key(message: types.Message, state: FSMContext):
         )
         return
 
-    # ← ИСПРАВЛЕНИЕ: используем Fernet-шифрование вместо base64
     try:
         encrypted = encrypt_key(key)
     except ValueError as e:
@@ -517,7 +682,6 @@ async def process_byok_key(message: types.Message, state: FSMContext):
         return
 
     async with async_session() as session:
-        # Удаляем старый ключ этого провайдера
         result = await session.execute(
             select(UserApiKey).where(
                 UserApiKey.user_id == message.from_user.id,
@@ -544,7 +708,7 @@ async def process_byok_key(message: types.Message, state: FSMContext):
     )
 
 
-# ============ УМНЫЙ ОБРАБОТЧИК (AI ИЛИ ЭХО) ============
+# ============ УМНЫЙ ОБРАБОТЧИК (ИЗМЕНЕНО — счётчик токенов) ============
 
 @router.message()
 async def smart_handler(message: types.Message):
@@ -575,8 +739,7 @@ async def smart_handler(message: types.Message):
         )
         return
 
-    # --- Проверяем наличие ключа (для модели по умолчанию) ---
-    # Определяем провайдера из дефолтной модели
+    # --- Проверяем наличие ключа ---
     default_model = "groq/llama-3.3-70b-versatile"
     provider = default_model.split("/")[0]
     
@@ -594,26 +757,21 @@ async def smart_handler(message: types.Message):
     # --- ВЫБИРАЕМ РОЛИ И СОБИРАЕМ ПРОМПТ ---
     wait_msg = await message.answer("⏳ Анализирую запрос и выбираю роли...")
     
-    # 1. Роутер выбирает роли по keywords
-    # Определяем max_roles из тарифа
-    from services.tariff_service import check_feature_access
     _, max_roles = await check_feature_access(user.tariff, "max_roles")
     if max_roles == 0:
-        max_roles = 5  # fallback
+        max_roles = 5
         
     selected_roles = await select_roles(message.from_user.id, message.text, max_roles=max_roles)
     
-    # 2. Строим динамический системный промпт
     system_prompt = await build_system_prompt(message.from_user.id, selected_roles)
     
-    # Показываем, какие роли активированы
     roles_names = ", ".join([r.name.split(":")[0] for r in selected_roles[:3]])
     try:
         await wait_msg.edit_text(f"⚡ Активированы роли: {roles_names}\n⏳ Думаю...")
     except Exception:
         pass
 
-    # 3. Отправляем в AI с динамическим промптом
+    # --- ОТПРАВЛЯЕМ В AI ---
     answer, success = await ask_llm(
         prompt=message.text,
         user_id=message.from_user.id,
@@ -621,8 +779,25 @@ async def smart_handler(message: types.Message):
         system_prompt=system_prompt
     )
 
-    # 4. Показываем ответ
+    # --- Показываем ответ и обновляем счётчик токенов ---
     if success:
+        # ← НОВОЕ: примерно считаем токены и сохраняем в БД
+        try:
+            tokens_used = count_tokens(message.text) + count_tokens(answer)
+            async with async_session() as session:
+                result = await session.execute(
+                    select(UserState).where(UserState.user_id == message.from_user.id)
+                )
+                us = result.scalar_one_or_none()
+                if us:
+                    counters = us.counters or {}
+                    counters["daily_tokens"] = counters.get("daily_tokens", 0) + tokens_used
+                    us.counters = counters
+                    await session.commit()
+        except Exception as e:
+            # Если не удалось сохранить счётчик — не ломаем ответ пользователю
+            pass
+        
         source_icon = "🔑" if source == "byok" else "⚡"
         roles_info = f"\n\n<i>🎭 Активные роли: {roles_names}</i>" if selected_roles else ""
         await message.answer(f"{source_icon} <b>Ответ AI:</b>\n\n{answer}{roles_info}")
