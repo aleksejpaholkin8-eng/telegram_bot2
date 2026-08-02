@@ -1,8 +1,6 @@
 # ============================================
-# ROLE ROUTER — ВЫБОР РОЛЕЙ ПО ЗАПРОСУ
+# ROLE ROUTER — УМНЫЙ ВЫБОР РОЛЕЙ
 # ============================================
-# Этот файл анализирует текст пользователя и выбирает
-# из базы данных 3-5 самых подходящих ролей.
 
 import logging
 from typing import List
@@ -13,37 +11,28 @@ from db.models import Role, User
 
 async def select_roles(user_id: int, user_text: str, max_roles: int = 5) -> List[Role]:
     """
-    Анализирует текст пользователя и выбирает релевантные роли.
-    
-    Логика:
-    1. Узнаём тариф пользователя (lite/pro/business)
-    2. Загружаем роли, доступные этому тарифу
-    3. Считаем совпадения keywords с текстом запроса
-    4. Возвращаем top-N ролей с наибольшим score
-    5. Если ничего не нашли — возвращаем базовые CORE-роли
+    Анализирует текст и выбирает релевантные роли.
+    Улучшенный matching: частичное совпадение + веса + фильтрация.
     """
     user_text_lower = user_text.lower()
+    words = set(user_text_lower.split())  # Разбиваем на слова
     
     async with async_session() as session:
-        # Узнаём тариф пользователя
+        # Узнаём тариф
         user_result = await session.execute(
             select(User).where(User.telegram_id == user_id)
         )
         user = user_result.scalar_one_or_none()
         tariff = user.tariff if user else "lite"
         
-        # Определяем, какие роли доступны по тарифу
-        # lite → только lite
-        # pro → lite + pro
-        # business → lite + pro + business
+        # Доступные тарифы
         if tariff == "lite":
             allowed_tiers = ["lite"]
         elif tariff == "pro":
             allowed_tiers = ["lite", "pro"]
-        else:  # business
+        else:
             allowed_tiers = ["lite", "pro", "business"]
         
-        # Загружаем активные роли с подходящим tier_access
         result = await session.execute(
             select(Role).where(
                 Role.is_active == True,
@@ -52,41 +41,72 @@ async def select_roles(user_id: int, user_text: str, max_roles: int = 5) -> List
         )
         all_roles = result.scalars().all()
         
-        # Считаем релевантность каждой роли
         scored_roles = []
+        
         for role in all_roles:
             score = 0
             
-            # Проверяем keywords
             if role.keywords:
                 keywords = [k.strip().lower() for k in role.keywords.split(",")]
+                
                 for kw in keywords:
-                    if kw and kw in user_text_lower:
-                        score += 1  # +1 за каждое совпадение keyword
+                    if not kw:
+                        continue
+                    
+                    # ПРАВИЛО 1: Слишком короткие слова (1-2 буквы) игнорируем
+                    if len(kw) <= 2:
+                        continue
+                    
+                    # ПРАВИЛО 2: Общие слова ("как", "что", "почему") — минимальный вес
+                    common_words = {"как", "что", "почему", "где", "когда", "зачем", "кто"}
+                    is_common = kw in common_words
+                    
+                    # ПРАВИЛО 3: Проверяем совпадения
+                    # A) keyword полностью входит в текст (например, "корейский" в "по-корейски")
+                    # B) текст входит в keyword
+                    # C) keyword как отдельное слово в тексте
+                    if kw in user_text_lower:
+                        if is_common:
+                            score += 0.2  # Общие слова почти не влияют
+                        elif len(kw) >= 6:
+                            score += 3    # Длинное слово — сильное совпадение
+                        else:
+                            score += 1    # Среднее слово
+                    
+                    # Отдельное слово в тексте — бонус
+                    if kw in words:
+                        score += 1
             
-            # Базовые роли (CORE) получают небольшой бонус,
-            # чтобы всегда были «под рукой»
-            if role.group_name == "CORE" and score > 0:
-                score += 0.5
+            # Бонус для релевантных ролей (не CORE)
+            if role.group_name != "CORE" and score > 0:
+                score += 1.5  # Специализированные роли приоритетнее
             
-            # Сохраняем только роли с ненулевым score
             if score > 0:
                 scored_roles.append((score, role))
         
-        # Сортируем: сначала самые релевантные
+        # Сортируем по score (убывание)
         scored_roles.sort(key=lambda x: x[0], reverse=True)
         
-        # Берём top-N
+        # Берём top-N, но обязательно добавляем 1 CORE-роль для стабильности
         selected = []
+        core_added = False
+        
         for score, role in scored_roles:
-            if len(selected) < max_roles:
+            if len(selected) >= max_roles:
+                break
+            
+            # Если это первая CORE-роль — берём её
+            if role.group_name == "CORE" and not core_added:
+                selected.append(role)
+                core_added = True
+            elif role.group_name != "CORE":
                 selected.append(role)
         
-        # Если ничего не нашли — берём первые 2-3 CORE-роли (базовые)
+        # Если ничего не нашли — берём 2 CORE-роли
         if not selected:
             for role in all_roles:
-                if role.group_name == "CORE" and len(selected) < 3:
+                if role.group_name == "CORE" and len(selected) < 2:
                     selected.append(role)
         
-        logging.info(f"RoleRouter: выбрано {len(selected)} ролей для запроса '{user_text[:50]}...'")
+        logging.info(f"RoleRouter: {len(selected)} ролей, топ: {[r.name for r in selected[:3]]}")
         return selected
