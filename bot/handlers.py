@@ -15,6 +15,8 @@ from sqlalchemy import select
 
 from services.llm_service import ask_llm, get_api_key
 from services.tariff_service import check_token_limit
+from services.role_router import select_roles
+from services.prompt_builder import build_system_prompt
 
 router = Router()
 
@@ -273,7 +275,7 @@ async def smart_handler(message: types.Message):
     """
     Главный обработчик сообщений.
     Lite → эхо
-    Pro/Business → AI (если есть ключ и лимит не исчерпан)
+    Pro/Business → выбор ролей → сборка промпта → AI
     """
     user = await get_or_create_user(message)
 
@@ -298,38 +300,46 @@ async def smart_handler(message: types.Message):
         return
 
     # --- Проверяем наличие ключа ---
-    api_key, source = await get_api_key(message.from_user.id, "xai")
+    api_key, source = await get_api_key(message.from_user.id, "groq")
     if not api_key:
         await message.answer(
             f"🔑 <b>Нет API-ключа</b>\n\n"
             f"Варианты:\n"
-            f"1. Владелец бота ещё не добавил XAI_API_KEY в Railway Variables\n"
+            f"1. Владелец бота ещё не добавил GROQ_API_KEY в Railway Variables\n"
             f"2. Добавь свой ключ: /setkey (BYOK)\n\n"
             f"Вы написали: {message.text}"
         )
         return
 
-    # --- Отправляем в AI ---
-    wait_msg = await message.answer("⏳ Думаю...")
+    # --- ВЫБИРАЕМ РОЛИ И СОБИРАЕМ ПРОМПТ ---
+    wait_msg = await message.answer("⏳ Анализирую запрос и выбираю роли...")
+    
+    # 1. Роутер выбирает роли по keywords
+    selected_roles = await select_roles(message.from_user.id, message.text)
+    
+    # 2. Строим динамический системный промпт
+    system_prompt = await build_system_prompt(message.from_user.id, selected_roles)
+    
+    # Показываем, какие роли активированы
+    roles_names = ", ".join([r.name.split(":")[0] for r in selected_roles[:3]])
+    try:
+        await wait_msg.edit_text(f"⚡ Активированы роли: {roles_names}\n⏳ Думаю...")
+    except Exception:
+        pass
 
-    # Простой системный промпт (позже заменим на динамическую сборку)
-    system = "Ты — полезный ассистент. Отвечай кратко, по существу, на русском языке."
-
+    # 3. Отправляем в AI с динамическим промптом
     answer, success = await ask_llm(
         prompt=message.text,
         user_id=message.from_user.id,
         model="groq/llama-3.3-70b-versatile",
-        system_prompt=system
+        system_prompt=system_prompt
     )
 
-    # Удаляем сообщение "Думаю..."
-    try:
-        await wait_msg.delete()
-    except Exception:
-        pass
-
+    # 4. Показываем ответ
     if success:
         source_icon = "🔑" if source == "byok" else "⚡"
-        await message.answer(f"{source_icon} <b>Ответ AI:</b>\n\n{answer}")
+        roles_info = f"\n\n<i>🎭 Активные роли: {roles_names}</i>" if selected_roles else ""
+        await message.answer(f"{source_icon} <b>Ответ AI:</b>\n\n{answer}{roles_info}")
     else:
         await message.answer(f"❌ <b>Ошибка:</b>\n\n{answer}")
+        
