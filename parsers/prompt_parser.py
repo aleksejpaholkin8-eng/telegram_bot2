@@ -1,5 +1,5 @@
 # ============================================
-# ПАРСЕР MARKDOWN-ФАЙЛА С РОЛЯМИ (v3 — под твой Промпт 1)
+# ПАРСЕР MARKDOWN-ФАЙЛА С РОЛЯМИ (v4 — фикс для твоего Промпта 1)
 # ============================================
 
 import re
@@ -61,18 +61,17 @@ class PromptParser:
             line = self.lines[i]
             
             # --- ОПРЕДЕЛЕНИЕ ГРУППЫ РОЛЕЙ ---
-            # "ЗАГРУЗИ В ПАМЯТЬ ГРУППУ 2 (...)" или "ЯДЕРНЫЕ РОЛИ (ГРУППА 1...)"
             group_match = re.search(r'ГРУПП[АУ]\s*(\d+)', line, re.IGNORECASE)
             if group_match and ('ЗАГРУЗИ' in line or 'РОЛИ' in line or 'ГРУППА' in line):
                 self.current_group = f"GROUP_{group_match.group(1)}"
                 i += 1
                 continue
             
-            # --- ПАРСИНГ ПРАВИЛ ---
-            rule_match = re.match(r'^\*\*Правило\s+№(\d+)\s+—\s+(.+?)\*\*\s*$', line)
+            # --- ПАРСИНГ ПРАВИЛ (мягкий regex) ---
+            # Ловит: **Правило №1 — Название** и **Правило №9 — (УПРАЗДНЕНО...)**
+            rule_match = re.match(r'^\*\*Правило\s+№(\d+)\s+—\s+(.+?)\*\*', line)
             if rule_match:
                 number = int(rule_match.group(1))
-                # Собираем текст правила до следующего правила/заголовка/разделителя
                 rule_lines = []
                 j = i + 1
                 while j < len(self.lines):
@@ -80,6 +79,7 @@ class PromptParser:
                     if (re.match(r'^\*\*Правило', nl) or 
                         re.match(r'^#{2,3}\s', nl) or
                         '[MULTIPART' in nl or
+                        'ЧАСТЬ' in nl and 'ГОТОВА' in nl or
                         nl.strip() == '---'):
                         break
                     rule_lines.append(nl)
@@ -90,55 +90,47 @@ class PromptParser:
                 i = j
                 continue
             
-            # --- ПАРСИНГ РОЛЕЙ ---
-            # Формат: "1. **Роль 1 — Название**" или "**Роль 1 — Название**"
-            role_match = re.match(r'^(\d+)\.\s+\*\*Роль\s+(\d+)\s+—\s+(.+?)\*\*(?:\s+—\s+(.+?))?\s*$', line)
-            if not role_match:
-                role_match = re.match(r'^\s*\*\*Роль\s+(\d+)\s+—\s+(.+?)\*\*(?:\s+—\s+(.+?))?\s*$', line)
+            # --- ПАРСИНГ РОЛЕЙ (3 формата) ---
+            role = None
             
-            if role_match:
-                groups = role_match.groups()
-                if len(groups) >= 4 and groups[0].isdigit() and groups[1].isdigit():
-                    # Формат: "1. **Роль 1 — Название**"
-                    role_num = groups[1]
-                    role_name = groups[2].strip()
-                else:
-                    # Формат: "**Роль 1 — Название**"
-                    role_num = groups[0]
-                    role_name = groups[1].strip()
-                
-                full_name = f"Роль {role_num}: {role_name}"
-                
-                # Собираем текст роли
-                prompt_lines = []
+            # Формат 1: "1. **Роль 1 — Название** (что-то)"
+            m1 = re.match(r'^(\d+)\.\s+\*\*Роль\s+(\d+)\s+—\s+(.+?)\*\*(?:\s+—\s+(.+?))?(?:\s*\(.+?\))?\s*$', line)
+            if m1:
+                role_num = m1.group(2)
+                role_name = m1.group(3).strip()
+                role = self._parse_role_body(i, role_num, role_name)
+            
+            # Формат 2: "**38. Роль 38 — Название**" (двойная звёздочка в начале)
+            if not role:
+                m2 = re.match(r'^\*\*(\d+)\.\s+Роль\s+(\d+)\s+—\s+(.+?)\*\*(?:\s*\(.+?\))?\s*$', line)
+                if m2:
+                    role_num = m2.group(2)
+                    role_name = m2.group(3).strip()
+                    role = self._parse_role_body(i, role_num, role_name)
+            
+            # Формат 3: "**Роль 1 — Название**" (без номера строки)
+            if not role:
+                m3 = re.match(r'^\s*\*\*Роль\s+(\d+)\s+—\s+(.+?)\*\*(?:\s+—\s+(.+?))?(?:\s*\(.+?\))?\s*$', line)
+                if m3:
+                    role_num = m3.group(1)
+                    role_name = m3.group(2).strip()
+                    role = self._parse_role_body(i, role_num, role_name)
+            
+            if role:
+                self.result.roles.append(role)
+                logger.debug(f"  🎭 {role.name} ({role.group_name})")
+                # Пропускаем строки тела роли
                 j = i + 1
                 while j < len(self.lines):
                     nl = self.lines[j]
                     if (re.match(r'^(\d+\.\s+)?\*\*Роль\s+\d+', nl) or 
+                        re.match(r'^\*\*(\d+\.\s+)?Роль\s+\d+', nl) or
                         re.match(r'^\*\*Правило', nl) or
                         re.match(r'^#{2,3}\s', nl) or
                         '[MULTIPART' in nl or
                         nl.strip() == '---'):
                         break
-                    prompt_lines.append(nl)
                     j += 1
-                
-                prompt_text = '\n'.join(prompt_lines).strip()
-                
-                # Авто-генерация keywords
-                keywords = self._generate_keywords(role_name, prompt_text)
-                
-                # Определяем тариф по пометкам в тексте
-                tier = self._detect_tier(prompt_text)
-                
-                self.result.roles.append(ParsedRole(
-                    name=full_name,
-                    group_name=self.current_group,
-                    prompt_text=prompt_text,
-                    keywords=keywords,
-                    tier_access=tier
-                ))
-                logger.debug(f"  🎭 {full_name} ({self.current_group}, {tier})")
                 i = j
                 continue
             
@@ -149,11 +141,13 @@ class PromptParser:
                 i += 1
                 continue
             
-            # --- ПАРСИНГ КОМАНД ---
-            # Формат: "1. `!ЖМИ` — описание" или "67. `!ПЕСОЧНИЦА [действие]`:"
-            cmd_match = re.match(r'^\d+\.\s+\`!([A-Z_А-ЯЁ0-9\s]+)\`(?:\s+\[[^\]]+\])?\s*—\s*(.+)$', line)
+            # --- ПАРСИНГ КОМАНД (упрощённый) ---
+            # Ловит: `!КОМАНДА` — описание, `!КОМАНДА [arg]` — описание, `/команда` — описание
+            cmd_match = re.match(r'^\d+\.\s+\`([!/]?[A-Z_А-ЯЁ0-9\s]+)\`(?:\s+\[[^\]]+\])?\s*—\s*(.+)$', line)
             if cmd_match:
-                name = "!" + cmd_match.group(1).strip()
+                name = cmd_match.group(1).strip()
+                if not name.startswith('!') and not name.startswith('/'):
+                    name = '!' + name  # ОБУЧИ, ПЛАН → !ОБУЧИ, !ПЛАН
                 desc = cmd_match.group(2).strip()
                 tier = self._detect_tier(desc)
                 self.result.commands.append(ParsedCommand(
@@ -165,18 +159,75 @@ class PromptParser:
                 i += 1
                 continue
             
+            # --- КОМАНДЫ С ДВОЕТОЧИЕМ (ШАБЛОН, ПЕСОЧНИЦА, ВЕРСИЯ, ПЕРЕНОС) ---
+            cmd_colon = re.match(r'^\d+\.\s+\`([!/]?[A-Z_А-ЯЁ0-9\s]+(?:\s+\[[^\]]+\])*)\`\s*:\s*$', line)
+            if cmd_colon:
+                name = cmd_colon.group(1).strip()
+                if not name.startswith('!') and not name.startswith('/'):
+                    name = '!' + name
+                # Собираем описание из следующих строк (подпункты)
+                desc_lines = []
+                j = i + 1
+                while j < len(self.lines):
+                    nl = self.lines[j]
+                    if (re.match(r'^\d+\.', nl) or 
+                        re.match(r'^\*\*КЛАСТЕР', nl) or
+                        re.match(r'^#{2,3}\s', nl) or
+                        '[MULTIPART' in nl or
+                        nl.strip() == '---'):
+                        break
+                    desc_lines.append(nl.strip())
+                    j += 1
+                desc = ' '.join(desc_lines).strip() or name
+                tier = self._detect_tier(desc)
+                self.result.commands.append(ParsedCommand(
+                    cluster=self.current_cluster,
+                    name=name,
+                    description=desc[:200],
+                    tier_access=tier
+                ))
+                i = j
+                continue
+            
             i += 1
         
         logger.info(f"✅ Парсинг завершён: {self.result.summary()}")
         return self.result
     
+    def _parse_role_body(self, start_idx: int, role_num: str, role_name: str) -> ParsedRole:
+        """Собирает тело роли и возвращает объект ParsedRole"""
+        full_name = f"Роль {role_num}: {role_name}"
+        prompt_lines = []
+        
+        j = start_idx + 1
+        while j < len(self.lines):
+            nl = self.lines[j]
+            if (re.match(r'^(\d+\.\s+)?\*\*Роль\s+\d+', nl) or 
+                re.match(r'^\*\*(\d+\.\s+)?Роль\s+\d+', nl) or
+                re.match(r'^\*\*Правило', nl) or
+                re.match(r'^#{2,3}\s', nl) or
+                '[MULTIPART' in nl or
+                nl.strip() == '---'):
+                break
+            prompt_lines.append(nl)
+            j += 1
+        
+        prompt_text = '\n'.join(prompt_lines).strip()
+        keywords = self._generate_keywords(role_name, prompt_text)
+        tier = self._detect_tier(prompt_text)
+        
+        return ParsedRole(
+            name=full_name,
+            group_name=self.current_group,
+            prompt_text=prompt_text,
+            keywords=keywords,
+            tier_access=tier
+        )
+    
     def _generate_keywords(self, role_name: str, prompt_text: str) -> str:
-        """Авто-генерация keywords из названия и текста роли"""
-        # Слова из названия (длиной > 3)
         name_words = re.findall(r'[А-Яа-яA-Za-z]{4,}', role_name)
         name_words = [w.lower() for w in name_words]
         
-        # Значимые слова из начала текста роли (исключаем стоп-слова)
         text_words = re.findall(r'[А-Яа-яA-Za-z]{5,}', prompt_text[:600])
         stop_words = {
             'который', 'которая', 'которые', 'этот', 'эта', 'эти', 'такой', 'такая',
@@ -192,14 +243,15 @@ class PromptParser:
             'контролирует', 'управляет', 'анализирует', 'разрабатывает', 'создаёт',
             'формирует', 'определяет', 'устанавливает', 'назначает', 'делегирует',
             'эскалирует', 'инициирует', 'запускает', 'останавливает', 'блокирует',
-            'разрешает', 'запрещает', 'требует', 'разрешает', 'предлагает',
-            'рекомендует', 'утверждает', 'отклоняет', 'принимает', 'передаёт',
-            'получает', 'обрабатывает', 'фиксирует', 'логирует', 'уведомляет',
-            'предупреждает', 'информирует', 'сообщает', 'докладывает', 'отчитывается'
+            'разрешает', 'запрещает', 'требует', 'предлагает', 'рекомендует',
+            'утверждает', 'отклоняет', 'принимает', 'передаёт', 'получает',
+            'обрабатывает', 'фиксирует', 'логирует', 'уведомляет', 'предупреждает',
+            'информирует', 'сообщает', 'докладывает', 'отчитывается', 'при', 'по',
+            'для', 'через', 'после', 'перед', 'время', 'место', 'поручения',
+            'вопросам', 'вопросах', 'вопросы', 'вопрос', 'вопросов'
         }
         text_words = [w.lower() for w in text_words if w.lower() not in stop_words]
         
-        # Объединяем, убираем дубликаты, берём топ-12
         all_words = []
         seen = set()
         for w in name_words + text_words:
@@ -210,13 +262,12 @@ class PromptParser:
         return ', '.join(all_words[:12])
     
     def _detect_tier(self, text: str) -> str:
-        """Определяет тариф по пометкам в тексте"""
         lower = text.lower()
-        if any(x in lower for x in ['доступно в pro и бизнес', 'доступно в pro/бизнес', 'доступен только в pro', 'pro и бизнес', 'pro/бизнес']):
+        if any(x in lower for x in ['доступно в pro и бизнес', 'pro и бизнес', 'pro/бизнес', 'доступен только в pro']):
             return 'pro'
-        if any(x in lower for x in ['доступно только в бизнес', 'доступен только в бизнес', 'только в бизнес-версии']):
+        if any(x in lower for x in ['доступно только в бизнес', 'только в бизнес-версии', 'доступен только в бизнес']):
             return 'business'
-        return 'business'  # По умолчанию все роли = business (настраивается в /admin)
+        return 'business'
 
 
 def parse_prompt_file(file_path: str) -> ParsedPrompt:
