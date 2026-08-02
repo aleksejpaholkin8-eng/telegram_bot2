@@ -117,20 +117,23 @@ async def cmd_roles(message: types.Message):
     from config.settings import settings
     
     async with async_session() as session:
-        # ← НОВОЕ: Владелец видит ВСЕ роли (для отладки)
+        # ← ВЛАДЕЛЕЦ: показываем все роли с пагинацией
         if message.from_user.id == settings.owner_id:
             result = await session.execute(
                 select(Role).where(Role.is_active == True).order_by(Role.id)
             )
             roles = result.scalars().all()
             
-            text = f"🎭 <b>ВСЕ РОЛИ (режим владельца):</b>\n\n"
-            for role in roles:
-                icon = "🆓" if role.tier_access == "lite" else ("⚡" if role.tier_access == "pro" else "💎")
-                text += f"{icon} <b>{role.name}</b> [{role.group_name}]\n"
-                text += f"   🔑 {role.keywords[:60]}...\n\n"
-            text += f"📊 Всего: {len(roles)} ролей"
-            await message.answer(text)
+            # Разбиваем на чанки по 15 ролей (чтобы влезло в 4096 символов)
+            chunk_size = 15
+            for i in range(0, len(roles), chunk_size):
+                chunk = roles[i:i+chunk_size]
+                text = f"🎭 <b>Роли {i+1}-{i+len(chunk)} из {len(roles)}</b>\n\n"
+                for role in chunk:
+                    icon = "🆓" if role.tier_access == "lite" else ("⚡" if role.tier_access == "pro" else "💎")
+                    text += f"{icon} <b>{role.name}</b> [{role.group_name}]\n"
+                    text += f"   🔑 {role.keywords[:50]}...\n\n"
+                await message.answer(text)
             return
         
         # Обычная логика для пользователей
