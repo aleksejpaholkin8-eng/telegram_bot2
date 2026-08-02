@@ -507,12 +507,19 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
 # НОВОЕ: /admin ПАНЕЛЬ (ШАГ 5.4)
 # ============================================
 
-@router.message(Command(commands="admin"))
-async def cmd_admin(message: types.Message):
+async def _send_admin_menu(target, user_id: int):
+    """
+    Универсальная функция показа админ-меню.
+    target — либо message, либо callback (aiogram сам разберётся).
+    user_id — ID пользователя (callback.from_user.id или message.from_user.id).
+    """
     from config.settings import settings
     
-    if message.from_user.id != settings.owner_id:
-        await message.answer("⛔ Эта команда только для владельца бота.")
+    if user_id != settings.owner_id:
+        if isinstance(target, types.Message):
+            await target.answer("⛔ Эта команда только для владельца бота.")
+        else:
+            await target.answer("⛔ Нет доступа", show_alert=True)
         return
     
     builder = InlineKeyboardBuilder()
@@ -521,12 +528,19 @@ async def cmd_admin(message: types.Message):
     builder.button(text="📋 Админ-команды", callback_data="admin:commands")
     builder.adjust(1)
     
-    await message.answer(
-        "⚙️ <b>Админ-панель</b>\n\n"
-        "Выбери раздел:",
-        reply_markup=builder.as_markup()
-    )
+    text = "⚙️ <b>Админ-панель</b>\n\nВыбери раздел:"
+    
+    if isinstance(target, types.CallbackQuery):
+        await target.message.edit_text(text, reply_markup=builder.as_markup())
+    else:
+        await target.answer(text, reply_markup=builder.as_markup())
 
+
+@router.message(Command(commands="admin"))
+async def cmd_admin(message: types.Message):
+    """Команда /admin — показывает меню владельцу"""
+    await _send_admin_menu(message, message.from_user.id)
+    
 
 @router.callback_query(F.data.startswith("admin:tariff:"))
 async def admin_show_tariff(callback: types.CallbackQuery):
@@ -666,7 +680,7 @@ async def admin_edit_limit_finish(message: types.Message, state: FSMContext):
 @router.callback_query(F.data == "admin:menu")
 async def admin_back_to_menu(callback: types.CallbackQuery):
     """Возвращает в главное меню админ-панели."""
-    await cmd_admin(callback.message)
+    await _send_admin_menu(callback, callback.from_user.id)
     await callback.answer()
 
 
@@ -799,10 +813,7 @@ async def process_byok_key(message: types.Message, state: FSMContext):
 @router.message(F.text == "🔧 Админ-меню")
 async def admin_menu_button(message: types.Message):
     """Обрабатывает нажатие reply-кнопки Админ-меню (только владелец)"""
-    from config.settings import settings
-    if message.from_user.id != settings.owner_id:
-        return
-    await cmd_admin(message)
+    await _send_admin_menu(message, message.from_user.id)
 
 
 # ============ АДМИН: ВЫБОР РАЗДЕЛА ============
