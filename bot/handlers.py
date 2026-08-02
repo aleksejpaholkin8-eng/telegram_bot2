@@ -165,6 +165,60 @@ async def cmd_commands(message: types.Message):
         await message.answer(text)
 
 
+@router.message(Command(commands="settariff"))
+async def cmd_settariff(message: types.Message):
+    """
+    Команда только для владельца бота.
+    Меняет тариф текущего пользователя.
+    Формат: /settariff pro
+    """
+    from config.settings import settings
+    
+    # Проверяем, что команду вызвал владелец
+    if message.from_user.id != settings.owner_id:
+        await message.answer("⛔ Эта команда только для владельца бота.")
+        return
+    
+    # Парсим аргумент (lite / pro / business)
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer(
+            "🎫 <b>Смена тарифа</b>\n\n"
+            "Формат: <code>/settariff lite</code>\n"
+            "Формат: <code>/settariff pro</code>\n"
+            "Формат: <code>/settariff business</code>\n\n"
+            f"Твой текущий ID: <code>{message.from_user.id}</code>"
+        )
+        return
+    
+    new_tariff = args[1].lower()
+    if new_tariff not in ["lite", "pro", "business"]:
+        await message.answer("❌ Неверный тариф. Доступны: lite, pro, business")
+        return
+    
+    # Меняем тариф в БД
+    async with async_session() as session:
+        result = await session.execute(
+            select(User).where(User.telegram_id == message.from_user.id)
+        )
+        user = result.scalar_one_or_none()
+        
+        if not user:
+            await message.answer("❌ Пользователь не найден. Сначала напиши /start")
+            return
+        
+        old_tariff = user.tariff
+        user.tariff = new_tariff
+        await session.commit()
+    
+    await message.answer(
+        f"✅ <b>Тариф изменён!</b>\n\n"
+        f"Было: {old_tariff.upper()}\n"
+        f"Стало: {new_tariff.upper()}\n\n"
+        f"Перезапусти бота: /start"
+    )
+
+
 # ============ FSM: РЕГИСТРАЦИЯ ============
 
 @router.message(UserRegistration.waiting_for_name)
