@@ -110,6 +110,11 @@ async def cmd_help(message: types.Message):
         "• /setkey — ввести свой API-ключ (BYOK)\n\n"
         "• /search [запрос] — поиск в интернете (Pro/Business)\n"
         "• /searchai [запрос] — поиск в интернете + ответ AI (Pro/Business)\n"
+        "\n📋 <b>!-Команды системы:</b>\n"
+        "• !ТРЕКИ — список треков\n"
+        "• !ТРЕК ДОБАВИТЬ [название]\n"
+        "• !ТРЕК УДАЛИТЬ [название]\n"
+        "• !ТРЕК ПАУЗА [название]\n"
         "🎫 Тарифы:\n"
         "🆓 Lite — команды и эхо, без AI\n"
         "⚡ Pro — AI через ключ владельца или свой (BYOK)\n"
@@ -997,6 +1002,159 @@ async def process_byok_key(message: types.Message, state: FSMContext):
         f"✅ <b>Ключ {provider.upper()} сохранён!</b>\n\n"
         f"Теперь ты используешь BYOK-режим.\n"
         f"Расходы на токены — на твоём счету."
+    )
+
+
+# ============ !-КОМАНДЫ СИСТЕМЫ (ЭТАП 7.1 — ТРЕКИ) ============
+
+def _get_tracks(user_state: UserState) -> list:
+    """Превращает tracks в нормализованный список словарей"""
+    tracks = user_state.tracks or []
+    normalized = []
+    for t in tracks:
+        if isinstance(t, str):
+            normalized.append({"name": t, "status": "active"})
+        elif isinstance(t, dict):
+            normalized.append(t)
+    return normalized
+
+
+def _save_tracks(user_state: UserState, tracks: list):
+    """Сохраняет треки обратно в объект состояния"""
+    user_state.tracks = tracks
+
+
+@router.message(F.text.startswith("!"))
+async def system_commands(message: types.Message):
+    """
+    Единый обработчик !-команд.
+    Работает как маршрутизатор: определяет команду и вызывает нужную логику.
+    """
+    text = message.text.strip()
+    parts = text.split(maxsplit=2)
+    cmd = parts[0].upper()
+    
+    # Получаем или создаём user_state
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserState).where(UserState.user_id == message.from_user.id)
+        )
+        user_state = result.scalar_one_or_none()
+        
+        if not user_state:
+            user_state = UserState(
+                user_id=message.from_user.id,
+                tracks=[],
+                json_passport={},
+                counters={}
+            )
+            session.add(user_state)
+            await session.commit()
+    
+    # ==================== !ТРЕКИ ====================
+    if cmd == "!ТРЕКИ":
+        tracks = _get_tracks(user_state)
+        if not tracks:
+            await message.answer(
+                "📋 <b>Треки</b>\n\n"
+                "У тебя пока нет активных треков.\n"
+                "Добавь: <code>!ТРЕК ДОБАВИТЬ Название</code>\n\n"
+                "💡 Примеры треков:\n"
+                "• Строительство/МОК\n"
+                "• Карьера/Вахта\n"
+                "• Инвестиции\n"
+                "• Корея/TOPIK\n"
+                "• ИИ и технологии/Обучение\n"
+                "• Психология/Дисциплина"
+            )
+            return
+        
+        text = "📋 <b>Твои треки:</b>\n\n"
+        active = [t for t in tracks if t.get("status") == "active"]
+        paused = [t for t in tracks if t.get("status") == "paused"]
+        
+        for t in active:
+            text += f"🟢 <b>{t['name']}</b>\n"
+        for t in paused:
+            text += f"⏸ <b>{t['name']}</b> (на паузе)\n"
+        
+        text += f"\n📊 Всего: {len(tracks)} | 🟢 Активных: {len(active)} | ⏸ Пауза: {len(paused)}"
+        await message.answer(text)
+        return
+    
+    # ==================== !ТРЕК ДОБАВИТЬ ====================
+    if cmd == "!ТРЕК" and len(parts) >= 3 and parts[1].upper() == "ДОБАВИТЬ":
+        name = parts[2].strip()
+        tracks = _get_tracks(user_state)
+        
+        if any(t["name"].lower() == name.lower() for t in tracks):
+            await message.answer(f"⚠️ Трек «{name}» уже есть в списке.")
+            return
+        
+        tracks.append({"name": name, "status": "active"})
+        _save_tracks(user_state, tracks)
+        
+        async with async_session() as session:
+            session.add(user_state)
+            await session.commit()
+        
+        await message.answer(
+            f"✅ Трек «<b>{name}</b>» добавлен!\n\n"
+            f"Всего треков: {len(tracks)}\n"
+            f"Смотри: <code>!ТРЕКИ</code>"
+        )
+        return
+    
+    # ==================== !ТРЕК УДАЛИТЬ ====================
+    if cmd == "!ТРЕК" and len(parts) >= 3 and parts[1].upper() == "УДАЛИТЬ":
+        name = parts[2].strip()
+        tracks = _get_tracks(user_state)
+        new_tracks = [t for t in tracks if t["name"].lower() != name.lower()]
+        
+        if len(new_tracks) == len(tracks):
+            await message.answer(f"❌ Трек «{name}» не найден.\n\nСмотри: <code>!ТРЕКИ</code>")
+            return
+        
+        _save_tracks(user_state, new_tracks)
+        async with async_session() as session:
+            session.add(user_state)
+            await session.commit()
+        
+        await message.answer(f"🗑 Трек «<b>{name}</b>» удалён.")
+        return
+    
+    # ==================== !ТРЕК ПАУЗА ====================
+    if cmd == "!ТРЕК" and len(parts) >= 3 and parts[1].upper() == "ПАУЗА":
+        name = parts[2].strip()
+        tracks = _get_tracks(user_state)
+        
+        found = False
+        for t in tracks:
+            if t["name"].lower() == name.lower():
+                t["status"] = "paused"
+                found = True
+                break
+        
+        if not found:
+            await message.answer(f"❌ Трек «{name}» не найден.")
+            return
+        
+        _save_tracks(user_state, tracks)
+        async with async_session() as session:
+            session.add(user_state)
+            await session.commit()
+        
+        await message.answer(f"⏸ Трек «<b>{name}</b>» поставлен на паузу.")
+        return
+    
+    # ==================== НЕИЗВЕСТНАЯ КОМАНДА ====================
+    await message.answer(
+        f"❓ Неизвестная команда: <code>{message.text[:30]}</code>\n\n"
+        f"📋 <b>Доступные !-команды:</b>\n"
+        f"<code>!ТРЕКИ</code> — список треков\n"
+        f"<code>!ТРЕК ДОБАВИТЬ Название</code>\n"
+        f"<code>!ТРЕК УДАЛИТЬ Название</code>\n"
+        f"<code>!ТРЕК ПАУЗА Название</code>"
     )
 
 
