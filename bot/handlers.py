@@ -11,7 +11,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.states import UserRegistration, ByokInput, UploadPrompt, AdminEditLimit, TrackMenu
 from db.database import async_session
 from db.models import User, Role, Command as CommandModel, UserState, UserApiKey, TariffFeature, RoleTariffAccess
-from sqlalchemy.orm import flag_modified
+from sqlalchemy.orm.attributes import flag_modified
 
 from services.llm_service import ask_llm, get_api_key
 from services.tariff_service import check_token_limit, check_feature_access
