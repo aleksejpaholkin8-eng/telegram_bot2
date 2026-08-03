@@ -9,7 +9,7 @@
 # • smart_handler — главный обработчик сообщений (AI-ответ)
 
 from aiogram import Router, types, F
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 
@@ -304,7 +304,9 @@ async def cmd_searchai(message: types.Message):
 
 # ============ SMART HANDLER (ГЛАВНЫЙ ОБРАБОТЧИК) ============
 
-@router.message()
+# ← ИСПРАВЛЕНИЕ: StateFilter(None) = срабатывает ТОЛЬКО когда нет FSM-состояния
+# Это предотвращает перехват сообщений во время диалогов (регистрация, треки, BYOK)
+@router.message(StateFilter(None))
 async def smart_handler(message: types.Message):
     """
     Главный обработчик сообщений.
