@@ -11,7 +11,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.states import UserRegistration, ByokInput, UploadPrompt, AdminEditLimit, TrackMenu
 from db.database import async_session
 from db.models import User, Role, Command as CommandModel, UserState, UserApiKey, TariffFeature, RoleTariffAccess
-from sqlalchemy import select
+from sqlalchemy.orm import flag_modified
 
 from services.llm_service import ask_llm, get_api_key
 from services.tariff_service import check_token_limit, check_feature_access
@@ -86,20 +86,27 @@ async def cmd_start(message: types.Message, state: FSMContext):
     )
         return
     
-        await message.answer(
+    # Обычный пользователь
+    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+    user_kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="🎛 Меню")]],
+        resize_keyboard=True
+    )
+    
+    await message.answer(
         f"👋 <b>Привет, {user.first_name or 'друг'}!</b>\n\n"
         f"🎫 Твой тариф: <b>{user.tariff.upper()}</b>\n\n"
         f"📋 Команды:\n"
         f"/start — начало\n"
         f"/help — справка\n"
-        f"/system — <b>главное меню</b> (кнопки)\n"
+        f"/system — <b>главное меню</b> (треки, фокус, прогресс)\n"
         f"/register — регистрация\n"
         f"/roles — доступные роли\n"
         f"/commands — доступные команды\n"
         f"/setkey — добавить свой API-ключ (BYOK)\n\n"
-        f"💡 Просто напиши сообщение — и я отвечу через AI (если тариф позволяет)."
+        f"💡 Просто напиши сообщение — и я отвечу через AI (если тариф позволяет).",
+        reply_markup=user_kb
     )
-
 
 @router.message(Command(commands="help"))
 async def cmd_help(message: types.Message):
@@ -1023,8 +1030,8 @@ def _get_tracks(user_state: UserState) -> list:
 def _save_tracks(user_state: UserState, tracks: list):
     """Сохраняет треки обратно в объект состояния (force dirty для JSON)"""
     import copy
-    # Deep copy заставляет SQLAlchemy увидеть изменение
     user_state.tracks = copy.deepcopy(tracks)
+    flag_modified(user_state, "tracks")  # ← Говорим SQLAlchemy: "это поле изменилось!"
 
 
 # ============ ИНТЕРАКТИВНОЕ МЕНЮ СИСТЕМЫ (/system) ============
@@ -1485,6 +1492,12 @@ async def system_commands(message: types.Message):
 
 
 # ============ УМНЫЙ ОБРАБОТЧИК (ИЗМЕНЕНО — счётчик токенов) ============
+
+@router.message(F.text == "🎛 Меню")
+async def user_menu_button(message: types.Message):
+    """Обработка reply-кнопки Меню для обычных пользователей"""
+    await cmd_system(message)
+
 
 @router.message(F.text == "🔧 Админ-меню")
 async def admin_menu_button(message: types.Message):
