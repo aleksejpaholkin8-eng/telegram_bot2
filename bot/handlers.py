@@ -721,7 +721,13 @@ async def _render_tariff_features(target_message, tariff: str):
     builder.button(text="← Назад в меню", callback_data="admin:menu")
     builder.adjust(2)
     
-    await target_message.edit_text(text, reply_markup=builder.as_markup())
+    try:
+        await target_message.edit_text(text, reply_markup=builder.as_markup())
+    except Exception as e:
+        if "message is not modified" in str(e):
+            pass
+        else:
+            raise
 
 
 async def _render_roles_list(target_message, tariff: str, page: int = 0):
@@ -772,7 +778,13 @@ async def _render_roles_list(target_message, tariff: str, page: int = 0):
     
     builder.adjust(2, 1)
     
-    await target_message.edit_text(text, reply_markup=builder.as_markup())
+    try:
+        await target_message.edit_text(text, reply_markup=builder.as_markup())
+    except Exception as e:
+        if "message is not modified" in str(e):
+            pass
+        else:
+            raise
 
 
 @router.callback_query(F.data.startswith("admin:tariff:"))
@@ -1264,10 +1276,16 @@ async def sys_tracks_menu(callback: types.CallbackQuery):
     keyboard.append([InlineKeyboardButton(text="➕ Добавить трек", callback_data="sys:tracks:add")])
     keyboard.append([InlineKeyboardButton(text="← Назад в меню", callback_data="sys:main")])
 
-    await callback.message.edit_text(
-        text, 
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
-    )
+        try:
+        await callback.message.edit_text(
+            text, 
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
+        )
+    except Exception as e:
+        if "message is not modified" in str(e):
+            pass  # Нормально, сообщение уже в нужном состоянии
+        else:
+            raise
     await callback.answer()
 
 
