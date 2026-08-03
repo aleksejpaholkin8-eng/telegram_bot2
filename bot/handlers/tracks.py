@@ -1,11 +1,6 @@
 # ============================================
 # ТРЕКИ, МЕНЮ СИСТЕМЫ И ЗАГЛУШКИ РАЗДЕЛОВ
 # ============================================
-# Здесь:
-# • /system — главное меню с inline-кнопками
-# • Интерактивное управление треками (кнопки)
-# • Reply-кнопки "🎛 Меню" и "🔧 Админ-меню"
-# • Заглушки для Фокус, Прогресс, AI-режим, Мои данные
 
 from aiogram import Router, types, F
 from aiogram.filters import Command
@@ -71,6 +66,7 @@ async def cmd_system(message: types.Message):
 async def sys_tracks_menu(callback: types.CallbackQuery):
     """
     Показывает список треков с кнопками.
+    Кнопки строятся от списка: active + paused (важно для индексов!)
     """
     async with async_session() as session:
         result = await session.execute(
@@ -88,7 +84,7 @@ async def sys_tracks_menu(callback: types.CallbackQuery):
     )
 
     keyboard = []
-    all_tracks = active + paused
+    all_tracks = active + paused  # ← Этот порядок используем и в меню, и в обработчике!
 
     if not all_tracks:
         text += "У тебя пока нет треков.\n"
@@ -138,6 +134,9 @@ async def sys_track_action(callback: types.CallbackQuery):
     """
     Обрабатывает нажатие ❌, ⏸, ▶️ у конкретного трека.
     Формат: sys:track:delete:0, sys:track:pause:1 и т.д.
+    
+    ← ИСПРАВЛЕНИЕ: восстанавливаем тот же порядок active+paused, 
+    что при создании кнопок. Иначе индекс указывает не на тот трек!
     """
     parts = callback.data.split(":")
     action = parts[2]
@@ -155,23 +154,36 @@ async def sys_track_action(callback: types.CallbackQuery):
 
         tracks = _get_tracks(user_state)
 
-        if idx >= len(tracks):
+        # ← ИСПРАВЛЕНИЕ: восстанавливаем порядок КАК В МЕНЮ (active + paused)
+        active = [t for t in tracks if t.get("status") == "active"]
+        paused = [t for t in tracks if t.get("status") == "paused"]
+        all_tracks = active + paused
+
+        if idx >= len(all_tracks):
             await callback.answer("❌ Трек не найден (список изменился)", show_alert=True)
             return
 
-        track = tracks[idx]
+        track = all_tracks[idx]  # ← Берём из all_tracks, а не из tracks!
         name = track["name"]
 
         if action == "delete":
-            tracks.pop(idx)
+            # Удаляем из ИСХОДНОГО списка tracks (по имени, чтобы точно найти)
+            original_tracks = [t for t in tracks if t["name"] != name]
             msg = f"🗑 Трек «{name}» удалён"
 
         elif action == "pause":
-            track["status"] = "paused"
+            # Находим в оригинальном списке и меняем статус
+            for t in tracks:
+                if t["name"] == name:
+                    t["status"] = "paused"
+                    break
             msg = f"⏸ Трек «{name}» на паузе"
 
         elif action == "resume":
-            track["status"] = "active"
+            for t in tracks:
+                if t["name"] == name:
+                    t["status"] = "active"
+                    break
             msg = f"▶️ Трек «{name}» возобновлён"
 
         else:
@@ -195,10 +207,11 @@ async def sys_tracks_add_start(callback: types.CallbackQuery, state: FSMContext)
     await callback.message.answer(
         "➕ <b>Добавление трека</b>\n\n"
         "Введи название нового трека.\n"
+        "Можно любое название — без ограничений!\n"
         "Примеры:\n"
         "• <code>Корея/TOPIK</code>\n"
         "• <code>Строительство/МОК</code>\n"
-        "• <code>Инвестиции</code>\n\n"
+        "• <code>Мой личный трек</code>\n\n"
         "Для отмены напиши /start"
     )
     await callback.answer()
