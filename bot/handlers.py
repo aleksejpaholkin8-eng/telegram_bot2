@@ -1,5 +1,5 @@
 # ============================================
-# ОБРАБОТЧИКИ (ЭТАП 5.4 — /admin панель + багфиксы)
+# ОБРАБОТЧИКИ (ЭТАП 5.4 + 7 — ИСПРАВЛЕННАЯ ВЕРСИЯ)
 # ============================================
 
 from aiogram import Router, types, F
@@ -7,6 +7,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from sqlalchemy import select  # ← ИСПРАВЛЕНИЕ №1: добавлен импорт select
 
 from bot.states import UserRegistration, ByokInput, UploadPrompt, AdminEditLimit, TrackMenu
 from db.database import async_session
@@ -46,19 +47,18 @@ async def get_or_create_user(message: types.Message):
             )
             session.add(user)
             await session.commit()
-        
+
         return user
 
 
-# ============ ОБЫЧНЫЕ КОМАНДЫ (без изменений) ============
+# ============ ОБЫЧНЫЕ КОМАНДЫ ============
 
 @router.message(Command(commands="start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
-    
+
     user = await get_or_create_user(message)
-    
-    # ← НОВОЕ: если владелец — показываем админ-кнопку под полем ввода
+
     from config.settings import settings
     if message.from_user.id == settings.owner_id:
         from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
@@ -68,31 +68,31 @@ async def cmd_start(message: types.Message, state: FSMContext):
         )
 
         await message.answer(
-        f"👋 <b>Привет, владелец!</b>\n\n"
-        f"🎫 Твой тариф: <b>{user.tariff.upper()}</b>\n\n"
-        f"📋 Команды:\n"
-        f"/start — начало\n"
-        f"/help — справка\n"
-        f"/system — <b>главное меню</b> (треки, фокус, прогресс)\n"
-        f"/register — регистрация\n"
-        f"/roles — доступные роли\n"
-        f"/commands — доступные команды\n"
-        f"/setkey — добавить свой API-ключ (BYOK)\n"
-        f"/admin — настройка тарифов\n"
-        f"/upload_prompt — загрузить промпт\n"
-        f"/settariff — сменить свой тариф\n\n"
-        f"💡 Просто напиши сообщение — и я отвечу через AI.",
-        reply_markup=admin_kb
-    )
+            f"👋 <b>Привет, владелец!</b>\n\n"
+            f"🎫 Твой тариф: <b>{user.tariff.upper()}</b>\n\n"
+            f"📋 Команды:\n"
+            f"/start — начало\n"
+            f"/help — справка\n"
+            f"/system — <b>главное меню</b> (треки, фокус, прогресс)\n"
+            f"/register — регистрация\n"
+            f"/roles — доступные роли\n"
+            f"/commands — доступные команды\n"
+            f"/setkey — добавить свой API-ключ (BYOK)\n"
+            f"/admin — настройка тарифов\n"
+            f"/upload_prompt — загрузить промпт\n"
+            f"/settariff — сменить свой тариф\n\n"
+            f"💡 Просто напиши сообщение — и я отвечу через AI.",
+            reply_markup=admin_kb
+        )
         return
-    
+
     # Обычный пользователь
     from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
     user_kb = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="🎛 Меню")]],
         resize_keyboard=True
     )
-    
+
     await message.answer(
         f"👋 <b>Привет, {user.first_name or 'друг'}!</b>\n\n"
         f"🎫 Твой тариф: <b>{user.tariff.upper()}</b>\n\n"
@@ -107,6 +107,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
         f"💡 Просто напиши сообщение — и я отвечу через AI (если тариф позволяет).",
         reply_markup=user_kb
     )
+
 
 @router.message(Command(commands="help"))
 async def cmd_help(message: types.Message):
@@ -157,16 +158,14 @@ async def cmd_setkey(message: types.Message, state: FSMContext):
 @router.message(Command(commands="roles"))
 async def cmd_roles(message: types.Message):
     user = await get_or_create_user(message)
-    from config.settings import settings
-    
+
     async with async_session() as session:
-               # Обычная логика для пользователей
-        # ← НОВОЕ: фильтруем через RoleTariffAccess, если админ уже настраивал
+        # ← ИСПРАВЛЕНИЕ №2: убран лишний return, убрано дублирование
         access_result = await session.execute(
             select(RoleTariffAccess).where(RoleTariffAccess.tariff == user.tariff).limit(1)
         )
         has_records = access_result.scalar_one_or_none() is not None
-        
+
         if has_records:
             result = await session.execute(
                 select(Role).join(
@@ -180,14 +179,14 @@ async def cmd_roles(message: types.Message):
             )
             roles = result.scalars().all()
         else:
-            # Fallback на старую логику (если админ ещё не настраивал)
+            # Fallback на старую логику
             if user.tariff == "lite":
                 allowed = ["lite"]
             elif user.tariff == "pro":
                 allowed = ["lite", "pro"]
             else:
                 allowed = ["lite", "pro", "business"]
-                
+
             result = await session.execute(
                 select(Role).where(
                     Role.is_active == True,
@@ -195,29 +194,13 @@ async def cmd_roles(message: types.Message):
                 )
             )
             roles = result.scalars().all()
-            return
-        
-        if user.tariff == "lite":
-            allowed = ["lite"]
-        elif user.tariff == "pro":
-            allowed = ["lite", "pro"]
-        else:
-            allowed = ["lite", "pro", "business"]
-            
-        result = await session.execute(
-            select(Role).where(
-                Role.is_active == True,
-                Role.tier_access.in_(allowed)
-            )
-        )
-        roles = result.scalars().all()
 
-                # ← НОВОЕ: разбиваем на чанки, чтобы не превысить лимит 4096 символов
+        # Пагинация: разбиваем на чанки по 15 ролей
         chunk_size = 15
         if len(roles) == 0:
             await message.answer(f"🎭 <b>Роли (тариф: {user.tariff.upper()}):</b>\n\nНет доступных ролей.")
             return
-            
+
         for i in range(0, len(roles), chunk_size):
             chunk = roles[i:i+chunk_size]
             text = f"🎭 <b>Роли {i+1}-{i+len(chunk)} из {len(roles)}</b> (тариф: {user.tariff.upper()})\n\n"
@@ -238,7 +221,7 @@ async def cmd_commands(message: types.Message):
             allowed = ["lite", "pro"]
         else:
             allowed = ["lite", "pro", "business"]
-            
+
         result = await session.execute(
             select(CommandModel).where(
                 CommandModel.tier_access.in_(allowed)
@@ -250,7 +233,7 @@ async def cmd_commands(message: types.Message):
         if len(commands) == 0:
             await message.answer(f"⌨️ <b>Команды (тариф: {user.tariff.upper()}):</b>\n\nНет доступных команд.")
             return
-            
+
         for i in range(0, len(commands), chunk_size):
             chunk = commands[i:i+chunk_size]
             text = f"⌨️ <b>Команды {i+1}-{i+len(chunk)} из {len(commands)}</b> (тариф: {user.tariff.upper()})\n\n"
@@ -258,7 +241,7 @@ async def cmd_commands(message: types.Message):
                 icon = "✅" if cmd.tier_access == "lite" else "🔒"
                 text += f"{icon} <b>{cmd.name}</b> — {cmd.description}\n"
             await message.answer(text)
-            
+
 
 @router.message(Command(commands="search"))
 async def cmd_search(message: types.Message):
@@ -267,8 +250,7 @@ async def cmd_search(message: types.Message):
     Формат: /search запрос
     """
     user = await get_or_create_user(message)
-    
-    # Проверяем доступность функции в тарифе
+
     has_access, _ = await check_feature_access(user.tariff, "web_search")
     if not has_access:
         await message.answer(
@@ -277,8 +259,7 @@ async def cmd_search(message: types.Message):
             "Обнови до Pro или Business: /admin (если ты владелец)"
         )
         return
-    
-    # Парсим запрос
+
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.answer(
@@ -288,24 +269,22 @@ async def cmd_search(message: types.Message):
             "💡 Результаты будут включены в ответ AI."
         )
         return
-    
+
     query = args[1]
     wait_msg = await message.answer(f"🔍 Ищу: <i>{query}</i>...")
-    
+
     results, error = await web_search(query, max_results=5)
-    
+
     if error:
         await wait_msg.edit_text(error)
         return
-    
-    # Формируем красивый ответ
+
     text = f"🔍 <b>Результаты поиска:</b> <i>{query}</i>\n\n"
     for i, r in enumerate(results, 1):
         text += f"{i}. <b>{r['title']}</b>\n"
         text += f"   {r['snippet'][:150]}...\n"
         text += f"   <a href='{r['url']}'>Ссылка</a>\n\n"
-    
-    # Разбиваем, если длинно
+
     if len(text) > 4000:
         parts = []
         current = f"🔍 <b>Результаты поиска:</b> <i>{query}</i>\n\n"
@@ -318,12 +297,13 @@ async def cmd_search(message: types.Message):
                 current += block
         if current:
             parts.append(current)
-        
+
         await wait_msg.delete()
         for part in parts:
             await message.answer(part, disable_web_page_preview=True)
     else:
         await wait_msg.edit_text(text, disable_web_page_preview=True)
+
 
 @router.message(Command(commands="searchai"))
 async def cmd_searchai(message: types.Message):
@@ -332,8 +312,7 @@ async def cmd_searchai(message: types.Message):
     Доступно в Pro/Business.
     """
     user = await get_or_create_user(message)
-    
-    # Проверяем, включён ли веб-поиск в тарифе
+
     has_access, _ = await check_feature_access(user.tariff, "web_search")
     if not has_access:
         await message.answer(
@@ -342,8 +321,7 @@ async def cmd_searchai(message: types.Message):
             "Админ может включить через /admin → ⚙️ Фичи тарифа."
         )
         return
-    
-    # Парсим запрос
+
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.answer(
@@ -355,53 +333,48 @@ async def cmd_searchai(message: types.Message):
             "Бот найдёт информацию и даст развёрнутый ответ через AI с указанием источников."
         )
         return
-    
+
     query = args[1]
     wait_msg = await message.answer(f"🔍 Ищу в интернете: <i>{query}</i>...")
-    
-    # --- 1. ПОИСК ---
+
     results, error = await web_search(query, max_results=5)
-    
+
     if error:
         await wait_msg.edit_text(
             f"❌ <b>Поиск не удался</b>\n\n{error}\n\n"
             f"Попробуй позже или задай вопрос без поиска — просто напиши текст."
         )
         return
-    
-    # --- 2. ФОРМИРУЕМ КОНТЕКСТ ПОИСКА ---
+
     search_context = "\n\n=== РЕЗУЛЬТАТЫ ПОИСКА В ИНТЕРНЕТЕ ===\n"
     for i, r in enumerate(results, 1):
         search_context += f"{i}. {r['title']}\n{r['snippet'][:400]}\nИсточник: {r['url']}\n\n"
     search_context += "=== КОНЕЦ ПОИСКА ===\n"
-    
+
     await wait_msg.edit_text(f"🔍 Найдено {len(results)} результатов. Анализирую через AI...")
-    
-    # --- 3. ВЫБИРАЕМ РОЛИ И СОБИРАЕМ ПРОМПТ ---
+
     _, max_roles = await check_feature_access(user.tariff, "max_roles")
     if max_roles == 0:
         max_roles = 5
-        
+
     selected_roles = await select_roles(message.from_user.id, query, max_roles=max_roles)
     base_prompt = await build_system_prompt(message.from_user.id, selected_roles)
-    
-    # Добавляем результаты поиска к системному промпту
+
     system_prompt = (
         base_prompt + "\n\n" +
         search_context +
         "\nИНСТРУКЦИЯ ДЛЯ AI: Ответь на вопрос пользователя, используя информацию из результатов поиска выше. "
         "Если информации недостаточно — скажи об этом. В конце ответа перечисли источники (номера)."
     )
-    
-    # --- 4. ОТПРАВЛЯЕМ В AI ---
+
     default_model = "groq/llama-3.3-70b-versatile"
     provider = default_model.split("/")[0]
-    
+
     api_key, source = await get_api_key(message.from_user.id, provider=provider)
     if not api_key:
         await message.answer("🔑 Нет API-ключа для AI.")
         return
-    
+
     answer, success = await ask_llm(
         prompt=query,
         user_id=message.from_user.id,
@@ -409,10 +382,8 @@ async def cmd_searchai(message: types.Message):
         system_prompt=system_prompt,
         max_tokens=1500
     )
-    
-    # --- 5. ПОКАЗЫВАЕМ ОТВЕТ ---
+
     if success:
-        # Считаем токены (включая поисковый контекст)
         try:
             tokens_used = count_tokens(query) + count_tokens(answer) + count_tokens(search_context)
             async with async_session() as session:
@@ -427,15 +398,13 @@ async def cmd_searchai(message: types.Message):
                     await session.commit()
         except Exception:
             pass
-        
-        # Формируем источники
+
         sources = "\n\n📚 <b>Источники:</b>\n"
         for i, r in enumerate(results[:3], 1):
             sources += f"{i}. <a href='{r['url']}'>{r['title'][:60]}</a>\n"
-        
+
         full_text = f"🔍 <b>Ответ AI (с поиском):</b>\n\n{answer}{sources}"
-        
-        # Разбиваем, если длинно
+
         if len(full_text) > 4000:
             await wait_msg.delete()
             parts = [answer[i:i+3800] for i in range(0, len(answer), 3800)]
@@ -452,11 +421,11 @@ async def cmd_searchai(message: types.Message):
 @router.message(Command(commands="settariff"))
 async def cmd_settariff(message: types.Message):
     from config.settings import settings
-    
+
     if message.from_user.id != settings.owner_id:
         await message.answer("⛔ Эта команда только для владельца бота.")
         return
-    
+
     args = message.text.split()
     if len(args) < 2:
         await message.answer(
@@ -467,26 +436,26 @@ async def cmd_settariff(message: types.Message):
             f"Твой текущий ID: <code>{message.from_user.id}</code>"
         )
         return
-    
+
     new_tariff = args[1].lower()
     if new_tariff not in ["lite", "pro", "business"]:
         await message.answer("❌ Неверный тариф. Доступны: lite, pro, business")
         return
-    
+
     async with async_session() as session:
         result = await session.execute(
             select(User).where(User.telegram_id == message.from_user.id)
         )
         user = result.scalar_one_or_none()
-        
+
         if not user:
             await message.answer("❌ Пользователь не найден. Сначала напиши /start")
             return
-        
+
         old_tariff = user.tariff
         user.tariff = new_tariff
         await session.commit()
-    
+
     await message.answer(
         f"✅ <b>Тариф изменён!</b>\n\n"
         f"Было: {old_tariff.upper()}\n"
@@ -495,19 +464,18 @@ async def cmd_settariff(message: types.Message):
     )
 
 
-# ============ /upload_prompt (ИЗМЕНЕНО — добавлен FSM) ============
+# ============ /upload_prompt (с FSM-защитой) ============
 
 @router.message(Command(commands="upload_prompt"))
 async def cmd_upload_prompt(message: types.Message, state: FSMContext):
     from config.settings import settings
-    
+
     if message.from_user.id != settings.owner_id:
         await message.answer("⛔ Эта команда только для владельца бота.")
         return
-    
-    # ← НОВОЕ: ставим бота в состояние "жду файл/текст"
+
     await state.set_state(UploadPrompt.waiting_for_file)
-    
+
     await message.answer(
         "📤 <b>Загрузка нового промпта</b>\n\n"
         "Отправь мне файл <code>.md</code> (Промпт 1) или вставь его текст сообщением.\n\n"
@@ -521,28 +489,22 @@ async def cmd_upload_prompt(message: types.Message, state: FSMContext):
 
 @router.message(F.document)
 async def handle_document_upload(message: types.Message, state: FSMContext):
-    """
-    Обрабатывает загруженный файл .md
-    Теперь срабатывает ТОЛЬКО если бот ждёт файл (состояние UploadPrompt).
-    """
     from config.settings import settings
-    from parsers.prompt_parser import parse_prompt_text
-    
-    # ← НОВОЕ: проверяем, ждём ли мы файл
+
     current_state = await state.get_state()
     if current_state != UploadPrompt.waiting_for_file.state:
-        return  # Игнорируем файлы в обычном режиме
-    
+        return
+
     if message.from_user.id != settings.owner_id:
         return
-    
+
     doc = message.document
     if not doc.file_name.endswith('.md'):
         await message.answer("❌ Нужен файл с расширением <code>.md</code>")
         return
-    
+
     wait_msg = await message.answer("⏳ Скачиваю файл...")
-    
+
     try:
         file = await message.bot.get_file(doc.file_id)
         file_content = await message.bot.download_file(file.file_path)
@@ -551,48 +513,36 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
         await wait_msg.edit_text(f"❌ Ошибка скачивания: {e}")
         await state.clear()
         return
-    
+
     await wait_msg.edit_text("🔍 Парсю файл...")
     await _process_prompt_text(message, text, wait_msg, state)
 
 
-# ← ИЗМЕНЕНО: добавлен фильтр состояния UploadPrompt.waiting_for_file
 @router.message(F.text, ~F.text.startswith('/'), UploadPrompt.waiting_for_file)
 async def handle_text_upload(message: types.Message, state: FSMContext):
-    """
-    Обрабатывает текст промпта, вставленный сообщением.
-    Срабатывает ТОЛЬКО если бот в состоянии waiting_for_file.
-    """
     from config.settings import settings
-    from parsers.prompt_parser import parse_prompt_text
-    
+
     if message.from_user.id != settings.owner_id:
         return
-    
+
     if len(message.text) < 1000:
         await message.answer("❌ Слишком короткий текст для промпта. Минимум 1000 символов.")
         return
-    
+
     wait_msg = await message.answer("🔍 Парсю текст...")
     await _process_prompt_text(message, message.text, wait_msg, state)
 
 
 async def _process_prompt_text(message: types.Message, text: str, wait_msg: types.Message, state: FSMContext):
-    """
-    Общая логика: парсинг + дельта-обновление БД
-    """
     from parsers.prompt_parser import parse_prompt_text
-    from db.database import async_session
-    from db.models import Role, Rule, Command
-    from sqlalchemy import select
-    
+
     try:
         parsed = parse_prompt_text(text)
     except Exception as e:
         await wait_msg.edit_text(f"❌ Ошибка парсинга: {e}")
         await state.clear()
         return
-    
+
     if not parsed.roles and not parsed.rules:
         await wait_msg.edit_text(
             "❌ В файле не найдены роли или правила.\n\n"
@@ -600,7 +550,7 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
         )
         await state.clear()
         return
-    
+
     async with async_session() as session:
         added_roles = 0
         updated_roles = 0
@@ -608,11 +558,11 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
         updated_rules = 0
         added_cmds = 0
         updated_cmds = 0
-        
+
         for role in parsed.roles:
             result = await session.execute(select(Role).where(Role.name == role.name))
             existing = result.scalar_one_or_none()
-            
+
             if existing:
                 existing.prompt_text = role.prompt_text
                 existing.keywords = role.keywords
@@ -629,43 +579,43 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
                     tier_access=role.tier_access
                 ))
                 added_roles += 1
-        
+
         for rule in parsed.rules:
             result = await session.execute(select(Rule).where(Rule.number == rule.number))
             existing = result.scalar_one_or_none()
-            
+
             if existing:
                 existing.text = rule.text
                 updated_rules += 1
             else:
                 session.add(Rule(number=rule.number, text=rule.text))
                 added_rules += 1
-        
+
         for cmd in parsed.commands:
-            result = await session.execute(select(Command).where(Command.name == cmd.name))
+            result = await session.execute(select(CommandModel).where(CommandModel.name == cmd.name))
             existing = result.scalar_one_or_none()
-            
+
             if existing:
                 existing.description = cmd.description
                 existing.cluster = cmd.cluster
                 existing.tier_access = cmd.tier_access
                 updated_cmds += 1
             else:
-                session.add(Command(
+                session.add(CommandModel(
                     cluster=cmd.cluster,
                     name=cmd.name,
                     description=cmd.description,
                     tier_access=cmd.tier_access
                 ))
                 added_cmds += 1
-        
+
         await session.commit()
 
-            # --- СОЗДАЁМ ДЕФОЛТНЫЕ ДОСТУПЫ ДЛЯ РОЛЕЙ (если админ ещё не настраивал) ---
+        # Создаём дефолтные доступы для ролей
         for role in parsed.roles:
             result = await session.execute(select(Role).where(Role.name == role.name))
             db_role = result.scalar_one()
-            
+
             for t in ["lite", "pro", "business"]:
                 exists = await session.execute(
                     select(RoleTariffAccess).where(
@@ -674,7 +624,6 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
                     )
                 )
                 if not exists.scalar_one_or_none():
-                    # Дефолт: business = True, остальное по tier_access
                     default_access = False
                     if t == "business":
                         default_access = True
@@ -682,19 +631,16 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
                         default_access = True
                     elif t == "lite" and db_role.tier_access == "lite":
                         default_access = True
-                    
+
                     session.add(RoleTariffAccess(
                         role_id=db_role.id,
                         tariff=t,
                         access=default_access
                     ))
         await session.commit()
-        # --- КОНЕЦ ---
 
-    
-    # ← НОВОЕ: очищаем состояние после обработки
     await state.clear()
-    
+
     report = (
         f"✅ <b>Промпт загружен!</b>\n\n"
         f"📊 <b>Статистика:</b>\n"
@@ -704,37 +650,32 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
         f"💾 Пользовательские данные сохранены.\n"
         f"Проверь: /roles, /commands"
     )
-    
+
     await wait_msg.edit_text(report)
 
 
 # ============================================
-# НОВОЕ: /admin ПАНЕЛЬ (ШАГ 5.4)
+# /admin ПАНЕЛЬ
 # ============================================
 
 async def _send_admin_menu(target, user_id: int):
-    """
-    Универсальная функция показа админ-меню.
-    target — либо message, либо callback (aiogram сам разберётся).
-    user_id — ID пользователя (callback.from_user.id или message.from_user.id).
-    """
     from config.settings import settings
-    
+
     if user_id != settings.owner_id:
         if isinstance(target, types.Message):
             await target.answer("⛔ Эта команда только для владельца бота.")
         else:
             await target.answer("⛔ Нет доступа", show_alert=True)
         return
-    
+
     builder = InlineKeyboardBuilder()
     builder.button(text="⚙️ Фичи тарифа", callback_data="admin:section:features")
     builder.button(text="🎭 Роли тарифа", callback_data="admin:section:roles")
     builder.button(text="📋 Админ-команды", callback_data="admin:commands")
     builder.adjust(1)
-    
+
     text = "⚙️ <b>Админ-панель</b>\n\nВыбери раздел:"
-    
+
     if isinstance(target, types.CallbackQuery):
         await target.message.edit_text(text, reply_markup=builder.as_markup())
     else:
@@ -743,63 +684,54 @@ async def _send_admin_menu(target, user_id: int):
 
 @router.message(Command(commands="admin"))
 async def cmd_admin(message: types.Message):
-    """Команда /admin — показывает меню владельцу"""
     await _send_admin_menu(message, message.from_user.id)
-    
+
 
 @router.callback_query(F.data.startswith("admin:tariff:"))
 async def admin_show_tariff(callback: types.CallbackQuery):
-    """
-    Показывает список фич выбранного тарифа с кнопками управления.
-    """
     tariff = callback.data.split(":")[2]
-    
+
     async with async_session() as session:
         result = await session.execute(
             select(TariffFeature).where(TariffFeature.tariff == tariff)
         )
         features = result.scalars().all()
-    
+
     icon = "🆓" if tariff == "lite" else "⚡" if tariff == "pro" else "💎"
     text = f"{icon} <b>Настройки тарифа {tariff.upper()}</b>\n\n"
-    
+
     builder = InlineKeyboardBuilder()
-    
+
     for feat in features:
         status = "✅ Вкл" if feat.access else "❌ Выкл"
         text += f"<b>{feat.feature}</b>\n"
         text += f"   Статус: {status} | Лимит: {feat.limit_value or '—'}\n\n"
-        
-        # Кнопка вкл/выкл
+
         action = "off" if feat.access else "on"
         btn_icon = "❌" if feat.access else "✅"
         builder.button(
             text=f"{btn_icon} {feat.feature}",
             callback_data=f"admin:toggle:{tariff}:{feat.feature}:{action}"
         )
-        # Кнопка изменить лимит
         builder.button(
             text="📝 Лимит",
             callback_data=f"admin:limit:{tariff}:{feat.feature}"
         )
-    
+
     builder.button(text="← Назад в меню", callback_data="admin:menu")
-    builder.adjust(2)  # По 2 кнопки в ряд (вкл/выкл + лимит)
-    
+    builder.adjust(2)
+
     await callback.message.edit_text(text, reply_markup=builder.as_markup())
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("admin:toggle:"))
 async def admin_toggle_feature(callback: types.CallbackQuery):
-    """
-    Переключает access (вкл/выкл) для функции.
-    """
     parts = callback.data.split(":")
     tariff = parts[2]
     feature = parts[3]
     new_access = parts[4] == "on"
-    
+
     async with async_session() as session:
         result = await session.execute(
             select(TariffFeature).where(
@@ -808,30 +740,28 @@ async def admin_toggle_feature(callback: types.CallbackQuery):
             )
         )
         feat = result.scalar_one_or_none()
-        
+
         if feat:
             feat.access = new_access
             await session.commit()
-    
+
     status = "включена" if new_access else "выключена"
     await callback.answer(f"✅ {feature} {status} для {tariff}")
-    
+
     # Обновляем экран
+    callback.data = f"admin:tariff:{tariff}"
     await admin_show_tariff(callback)
 
 
 @router.callback_query(F.data.startswith("admin:limit:"))
 async def admin_edit_limit_start(callback: types.CallbackQuery, state: FSMContext):
-    """
-    Начинает диалог изменения лимита. Переводит в состояние ожидания числа.
-    """
     parts = callback.data.split(":")
     tariff = parts[2]
     feature = parts[3]
-    
+
     await state.set_state(AdminEditLimit.waiting_for_value)
     await state.update_data(tariff=tariff, feature=feature)
-    
+
     await callback.message.answer(
         f"📝 <b>Изменение лимита</b>\n\n"
         f"Тариф: <b>{tariff.upper()}</b>\n"
@@ -846,19 +776,16 @@ async def admin_edit_limit_start(callback: types.CallbackQuery, state: FSMContex
 
 @router.message(AdminEditLimit.waiting_for_value)
 async def admin_edit_limit_finish(message: types.Message, state: FSMContext):
-    """
-    Получает число от пользователя и сохраняет новый лимит.
-    """
     data = await state.get_data()
     tariff = data["tariff"]
     feature = data["feature"]
-    
+
     try:
         new_limit = int(message.text.strip())
     except ValueError:
         await message.answer("❌ Нужно ввести целое число. Попробуй снова.")
         return
-    
+
     async with async_session() as session:
         result = await session.execute(
             select(TariffFeature).where(
@@ -867,11 +794,11 @@ async def admin_edit_limit_finish(message: types.Message, state: FSMContext):
             )
         )
         feat = result.scalar_one_or_none()
-        
+
         if feat:
             feat.limit_value = new_limit
             await session.commit()
-    
+
     await state.clear()
     await message.answer(
         f"✅ <b>Лимит обновлён!</b>\n\n"
@@ -884,12 +811,149 @@ async def admin_edit_limit_finish(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin:menu")
 async def admin_back_to_menu(callback: types.CallbackQuery):
-    """Возвращает в главное меню админ-панели."""
     await _send_admin_menu(callback, callback.from_user.id)
     await callback.answer()
 
 
-# ============ FSM: РЕГИСТРАЦИЯ (без изменений) ============
+@router.callback_query(F.data == "admin:section:features")
+async def admin_section_features(callback: types.CallbackQuery):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🆓 Lite", callback_data="admin:tariff:lite")
+    builder.button(text="⚡ Pro", callback_data="admin:tariff:pro")
+    builder.button(text="💎 Business", callback_data="admin:tariff:business")
+    builder.button(text="← Назад", callback_data="admin:menu")
+    builder.adjust(3)
+
+    await callback.message.edit_text(
+        "⚙️ <b>Настройка фич тарифа</b>\n\nВыбери тариф:",
+        reply_markup=builder.as_markup()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:section:roles")
+async def admin_section_roles(callback: types.CallbackQuery):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🆓 Lite", callback_data="admin:roles:tariff:lite:page:0")
+    builder.button(text="⚡ Pro", callback_data="admin:roles:tariff:pro:page:0")
+    builder.button(text="💎 Business", callback_data="admin:roles:tariff:business:page:0")
+    builder.button(text="← Назад", callback_data="admin:menu")
+    builder.adjust(3)
+
+    await callback.message.edit_text(
+        "🎭 <b>Настройка ролей по тарифам</b>\n\n"
+        "Здесь ты решаешь, какие роли доступны в каждом тарифе.\n\n"
+        "Выбери тариф:",
+        reply_markup=builder.as_markup()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:commands")
+async def admin_commands_list(callback: types.CallbackQuery):
+    text = (
+        "📋 <b>Админ-команды</b>\n\n"
+        "/admin — главное меню\n"
+        "/upload_prompt — загрузить новый промпт\n"
+        "/settariff [lite/pro/business] — сменить свой тариф\n"
+        "/setkey — ввести BYOK-ключ\n\n"
+        "⚠️ Все эти команды доступны только тебе (владельцу)."
+    )
+    builder = InlineKeyboardBuilder()
+    builder.button(text="← Назад", callback_data="admin:menu")
+
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:roles:tariff:"))
+async def admin_roles_list(callback: types.CallbackQuery):
+    parts = callback.data.split(":")
+    tariff = parts[3]
+    page = int(parts[5]) if len(parts) > 5 else 0
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Role).where(Role.is_active == True).order_by(Role.id)
+        )
+        all_roles = result.scalars().all()
+
+        access_result = await session.execute(
+            select(RoleTariffAccess).where(RoleTariffAccess.tariff == tariff)
+        )
+        access_map = {a.role_id: a.access for a in access_result.scalars().all()}
+
+    icon = "🆓" if tariff == "lite" else "⚡" if tariff == "pro" else "💎"
+    per_page = 10
+    total_pages = (len(all_roles) + per_page - 1) // per_page
+    start = page * per_page
+    end = start + per_page
+    page_roles = all_roles[start:end]
+
+    text = f"{icon} <b>Роли для тарифа {tariff.upper()}</b> (стр. {page+1}/{total_pages})\n\n"
+    text += "Нажми на роль, чтобы переключить доступ:\n\n"
+
+    builder = InlineKeyboardBuilder()
+
+    for role in page_roles:
+        access = access_map.get(role.id, False)
+        status = "✅" if access else "❌"
+        btn_text = f"{status} {role.name[:35]}"
+        builder.button(
+            text=btn_text,
+            callback_data=f"admin:role:toggle:{tariff}:{role.id}"
+        )
+
+    builder.adjust(1)
+
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(("← Назад", f"admin:roles:tariff:{tariff}:page:{page-1}"))
+    if page < total_pages - 1:
+        nav_buttons.append(("Вперёд →", f"admin:roles:tariff:{tariff}:page:{page+1}"))
+    nav_buttons.append(("← К тарифам", "admin:section:roles"))
+
+    for text_btn, data in nav_buttons:
+        builder.button(text=text_btn, callback_data=data)
+
+    builder.adjust(2, 1)
+
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:role:toggle:"))
+async def admin_role_toggle(callback: types.CallbackQuery):
+    parts = callback.data.split(":")
+    tariff = parts[3]
+    role_id = int(parts[4])
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(RoleTariffAccess).where(
+                RoleTariffAccess.role_id == role_id,
+                RoleTariffAccess.tariff == tariff
+            )
+        )
+        access = result.scalar_one_or_none()
+
+        if access:
+            access.access = not access.access
+            new_status = access.access
+        else:
+            session.add(RoleTariffAccess(role_id=role_id, tariff=tariff, access=True))
+            new_status = True
+
+        await session.commit()
+
+    status_text = "включена" if new_status else "выключена"
+    await callback.answer(f"Роль {status_text} для {tariff}")
+
+    callback.data = f"admin:roles:tariff:{tariff}:page:0"
+    await admin_roles_list(callback)
+
+
+# ============ FSM: РЕГИСТРАЦИЯ ============
 
 @router.message(UserRegistration.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
@@ -955,7 +1019,7 @@ async def process_confirm_invalid(message: types.Message):
     await message.answer("Не понял. Напиши <b>да</b> или <b>нет</b>.")
 
 
-# ============ FSM: ВВОД КЛЮЧА BYOK (без изменений) ============
+# ============ FSM: ВВОД КЛЮЧА BYOK ============
 
 @router.message(ByokInput.waiting_for_key)
 async def process_byok_key(message: types.Message, state: FSMContext):
@@ -1013,7 +1077,7 @@ async def process_byok_key(message: types.Message, state: FSMContext):
     )
 
 
-# ============ !-КОМАНДЫ СИСТЕМЫ (ЭТАП 7.1 — ТРЕКИ) ============
+# ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ТРЕКОВ ============
 
 def _get_tracks(user_state: UserState) -> list:
     """Превращает tracks в нормализованный список словарей"""
@@ -1031,16 +1095,13 @@ def _save_tracks(user_state: UserState, tracks: list):
     """Сохраняет треки обратно в объект состояния (force dirty для JSON)"""
     import copy
     user_state.tracks = copy.deepcopy(tracks)
-    flag_modified(user_state, "tracks")  # ← Говорим SQLAlchemy: "это поле изменилось!"
+    flag_modified(user_state, "tracks")
 
 
 # ============ ИНТЕРАКТИВНОЕ МЕНЮ СИСТЕМЫ (/system) ============
 
 @router.message(Command(commands=["system", "menu"]))
 async def cmd_system(message: types.Message):
-    """
-    Главное меню системы. Интерактивные кнопки вместо !-команд.
-    """
     builder = InlineKeyboardBuilder()
     builder.button(text="🎯 Треки", callback_data="sys:tracks:menu")
     builder.button(text="⚡ Фокус", callback_data="sys:focus:menu")
@@ -1048,7 +1109,7 @@ async def cmd_system(message: types.Message):
     builder.button(text="🧠 AI-режим", callback_data="sys:ai_mode")
     builder.button(text="📋 Мои данные", callback_data="sys:profile")
     builder.adjust(2, 2, 1)
-    
+
     await message.answer(
         "🎛 <b>Главное меню Nexus AI</b>\n\n"
         "Выбери раздел кнопкой ниже.\n\n"
@@ -1058,51 +1119,62 @@ async def cmd_system(message: types.Message):
     )
 
 
-# ============ ТРЕКИ (ИНТЕРАКТИВНОЕ МЕНЮ) ============
-
-# ============ ТРЕКИ (ИНТЕРАКТИВНОЕ МЕНЮ С INLINE-КНОПКАМИ) ============
+# ============ ТРЕКИ (ИНТЕРАКТИВНОЕ МЕНЮ) — ИСПРАВЛЕННАЯ ВЕРСИЯ ============
 
 @router.callback_query(F.data == "sys:tracks:menu")
 async def sys_tracks_menu(callback: types.CallbackQuery):
-    """Показывает список треков. Название — текст, кнопки — только действия."""
+    """
+    Показывает список треков с кнопками.
+    ← ИСПРАВЛЕНИЕ: кнопки теперь содержат имя трека для ясности.
+    """
     async with async_session() as session:
         result = await session.execute(
             select(UserState).where(UserState.user_id == callback.from_user.id)
         )
         user_state = result.scalar_one_or_none()
-    
+
     tracks = _get_tracks(user_state) if user_state else []
     active = [t for t in tracks if t.get("status") == "active"]
     paused = [t for t in tracks if t.get("status") == "paused"]
-    
+
     text = (
         "🎯 <b>Управление треками</b>\n\n"
         f"🟢 Активных: {len(active)} | ⏸ На паузе: {len(paused)}\n\n"
     )
-    
+
     keyboard = []
     all_tracks = active + paused
-    
+
     if not all_tracks:
         text += "У тебя пока нет треков.\n"
     else:
         for idx, t in enumerate(all_tracks):
             icon = "🟢" if t.get("status") == "active" else "⏸"
-            # ← Название трека — просто текст в сообщении, НЕ кнопка
-            text += f"{icon} <b>{t['name']}</b>\n\n"
-            
-            # Кнопки действий под этим треком (один ряд)
+            text += f"{icon} <b>{t['name']}</b>\n"
+
+            # ← ИСПРАВЛЕНИЕ: кнопки с подписями треков для ясности
             action_row = []
+            short_name = t['name'][:15]  # Обрезаем длинные имена для кнопок
+
             if t.get("status") == "active":
-                action_row.append(InlineKeyboardButton(text="⏸ Пауза", callback_data=f"sys:track:pause:{idx}"))
+                action_row.append(InlineKeyboardButton(
+                    text=f"⏸ {short_name}", 
+                    callback_data=f"sys:track:pause:{idx}"
+                ))
             else:
-                action_row.append(InlineKeyboardButton(text="▶️ Возобновить", callback_data=f"sys:track:resume:{idx}"))
-            action_row.append(InlineKeyboardButton(text="❌ Удалить", callback_data=f"sys:track:delete:{idx}"))
+                action_row.append(InlineKeyboardButton(
+                    text=f"▶️ {short_name}", 
+                    callback_data=f"sys:track:resume:{idx}"
+                ))
+            action_row.append(InlineKeyboardButton(
+                text=f"❌ {short_name}", 
+                callback_data=f"sys:track:delete:{idx}"
+            ))
             keyboard.append(action_row)
-    
+
     keyboard.append([InlineKeyboardButton(text="➕ Добавить трек", callback_data="sys:tracks:add")])
     keyboard.append([InlineKeyboardButton(text="← Назад в меню", callback_data="sys:main")])
-    
+
     await callback.message.edit_text(
         text, 
         reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -1114,52 +1186,52 @@ async def sys_tracks_menu(callback: types.CallbackQuery):
 async def sys_track_action(callback: types.CallbackQuery):
     """
     Обрабатывает нажатие ❌, ⏸, ▶️ у конкретного трека.
-    Формат callback_data: sys:track:delete:0, sys:track:pause:1 и т.д.
+    Формат: sys:track:delete:0, sys:track:pause:1 и т.д.
     """
     parts = callback.data.split(":")
     action = parts[2]  # delete / pause / resume
     idx = int(parts[3])
-    
+
     async with async_session() as session:
         result = await session.execute(
             select(UserState).where(UserState.user_id == callback.from_user.id)
         )
         user_state = result.scalar_one_or_none()
-        
+
         if not user_state:
             await callback.answer("❌ Ошибка: состояние не найдено", show_alert=True)
             return
-        
+
         tracks = _get_tracks(user_state)
-        
+
         if idx >= len(tracks):
             await callback.answer("❌ Трек не найден (список изменился)", show_alert=True)
             return
-        
+
         track = tracks[idx]
         name = track["name"]
-        
+
         if action == "delete":
             tracks.pop(idx)
             msg = f"🗑 Трек «{name}» удалён"
-        
+
         elif action == "pause":
             track["status"] = "paused"
             msg = f"⏸ Трек «{name}» на паузе"
-        
+
         elif action == "resume":
             track["status"] = "active"
             msg = f"▶️ Трек «{name}» возобновлён"
-        
+
         else:
             await callback.answer("❌ Неизвестное действие", show_alert=True)
             return
-        
+
         _save_tracks(user_state, tracks)
         await session.commit()
-    
+
     await callback.answer(msg)
-    
+
     # Обновляем меню треков
     callback.data = "sys:tracks:menu"
     await sys_tracks_menu(callback)
@@ -1167,10 +1239,9 @@ async def sys_track_action(callback: types.CallbackQuery):
 
 @router.callback_query(F.data == "sys:tracks:add")
 async def sys_tracks_add_start(callback: types.CallbackQuery, state: FSMContext):
-    """Начинает диалог добавления трека (только добавление оставляем текстом)"""
     await state.set_state(TrackMenu.waiting_for_name)
     await state.update_data(action="add")
-    
+
     await callback.message.answer(
         "➕ <b>Добавление трека</b>\n\n"
         "Введи название нового трека.\n"
@@ -1185,21 +1256,20 @@ async def sys_tracks_add_start(callback: types.CallbackQuery, state: FSMContext)
 
 @router.message(TrackMenu.waiting_for_name)
 async def sys_tracks_process_name(message: types.Message, state: FSMContext):
-    """Обрабатывает ввод названия трека (только для добавления)"""
     data = await state.get_data()
     action = data.get("action")
     name = message.text.strip()
-    
+
     if action != "add":
         await state.clear()
         return
-    
+
     async with async_session() as session:
         result = await session.execute(
             select(UserState).where(UserState.user_id == message.from_user.id)
         )
         user_state = result.scalar_one_or_none()
-        
+
         if not user_state:
             user_state = UserState(
                 user_id=message.from_user.id,
@@ -1208,31 +1278,30 @@ async def sys_tracks_process_name(message: types.Message, state: FSMContext):
                 counters={}
             )
             session.add(user_state)
-        
+
         tracks = _get_tracks(user_state)
-        
+
         if any(t["name"].lower() == name.lower() for t in tracks):
             await message.answer(f"⚠️ Трек «{name}» уже есть.")
             await state.clear()
             return
-        
+
         tracks.append({"name": name, "status": "active"})
         _save_tracks(user_state, tracks)
         await session.commit()
-        
+
         await message.answer(
             f"✅ Трек «<b>{name}</b>» добавлен!\n\n"
             f"Всего треков: {len(tracks)}"
         )
-    
+
     await state.clear()
-    
-    # Предлагаем вернуться
+
     builder = InlineKeyboardBuilder()
     builder.button(text="🎯 К трекам", callback_data="sys:tracks:menu")
     builder.button(text="🎛 Главное меню", callback_data="sys:main")
     builder.adjust(2)
-    
+
     await message.answer("Что дальше?", reply_markup=builder.as_markup())
 
 
@@ -1256,19 +1325,29 @@ async def sys_ai_mode_stub(callback: types.CallbackQuery):
 @router.callback_query(F.data == "sys:profile")
 async def sys_profile_stub(callback: types.CallbackQuery):
     await callback.answer("📋 Мои данные — в разработке", show_alert=True)
-    
 
-# ============ НАЗАД В ГЛАВНОЕ МЕНЮ ============
 
 @router.callback_query(F.data == "sys:main")
 async def sys_back_to_main(callback: types.CallbackQuery):
-    """Возвращает в главное меню системы"""
     await cmd_system(callback.message)
     await callback.answer()
 
 
+# ============ REPLY-КНОПКИ ============
+
+@router.message(F.text == "🎛 Меню")
+async def user_menu_button(message: types.Message):
+    await cmd_system(message)
+
+
+@router.message(F.text == "🔧 Админ-меню")
+async def admin_menu_button(message: types.Message):
+    await _send_admin_menu(message, message.from_user.id)
+
+
+# ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ !-КОМАНД ============
+
 async def _set_response_mode(message: types.Message, mode: str):
-    """Сохраняет режим ответа (short/long) в json_passport"""
     async with async_session() as session:
         result = await session.execute(
             select(UserState).where(UserState.user_id == message.from_user.id)
@@ -1281,7 +1360,7 @@ async def _set_response_mode(message: types.Message, mode: str):
         passport["response_mode"] = mode
         us.json_passport = passport
         await session.commit()
-    
+
     mode_text = "📄 Сжатый (только тезисы)" if mode == "short" else "📖 Развёрнутый (полный ответ)"
     await message.answer(
         f"✅ Режим ответа: <b>{mode_text}</b>\n\n"
@@ -1291,7 +1370,6 @@ async def _set_response_mode(message: types.Message, mode: str):
 
 
 async def _set_focus(message: types.Message, topic: str):
-    """Сохраняет фокус-тему в json_passport"""
     async with async_session() as session:
         result = await session.execute(
             select(UserState).where(UserState.user_id == message.from_user.id)
@@ -1304,7 +1382,7 @@ async def _set_focus(message: types.Message, topic: str):
         passport["focus"] = topic
         us.json_passport = passport
         await session.commit()
-    
+
     await message.answer(
         f"🎯 <b>Фокус установлен:</b> <i>{topic}</i>\n\n"
         f"AI будет приоритизировать эту тему в следующих ответах.\n"
@@ -1313,7 +1391,6 @@ async def _set_focus(message: types.Message, topic: str):
 
 
 async def _reset_settings(message: types.Message):
-    """Сбрасывает режим и фокус"""
     async with async_session() as session:
         result = await session.execute(
             select(UserState).where(UserState.user_id == message.from_user.id)
@@ -1325,27 +1402,24 @@ async def _reset_settings(message: types.Message):
             passport.pop("focus", None)
             us.json_passport = passport
             await session.commit()
-    
+
     await message.answer("🔄 <b>Настройки сброшены.</b>\n\nСтандартный режим, фокус снят.")
 
 
+# ============ !-КОМАНДЫ СИСТЕМЫ ============
+
 @router.message(F.text.startswith("!"))
 async def system_commands(message: types.Message):
-    """
-    Единый обработчик !-команд.
-    Работает как маршрутизатор: определяет команду и вызывает нужную логику.
-    """
     text = message.text.strip()
     parts = text.split(maxsplit=2)
     cmd = parts[0].upper()
-    
-    # Получаем или создаём user_state
+
     async with async_session() as session:
         result = await session.execute(
             select(UserState).where(UserState.user_id == message.from_user.id)
         )
         user_state = result.scalar_one_or_none()
-        
+
         if not user_state:
             user_state = UserState(
                 user_id=message.from_user.id,
@@ -1355,7 +1429,7 @@ async def system_commands(message: types.Message):
             )
             session.add(user_state)
             await session.commit()
-    
+
     # ==================== !ТРЕКИ ====================
     if cmd == "!ТРЕКИ":
         tracks = _get_tracks(user_state)
@@ -1373,82 +1447,82 @@ async def system_commands(message: types.Message):
                 "• Психология/Дисциплина"
             )
             return
-        
+
         text = "📋 <b>Твои треки:</b>\n\n"
         active = [t for t in tracks if t.get("status") == "active"]
         paused = [t for t in tracks if t.get("status") == "paused"]
-        
+
         for t in active:
             text += f"🟢 <b>{t['name']}</b>\n"
         for t in paused:
             text += f"⏸ <b>{t['name']}</b> (на паузе)\n"
-        
+
         text += f"\n📊 Всего: {len(tracks)} | 🟢 Активных: {len(active)} | ⏸ Пауза: {len(paused)}"
         await message.answer(text)
         return
-    
+
     # ==================== !ТРЕК ДОБАВИТЬ ====================
     if cmd == "!ТРЕК" and len(parts) >= 3 and parts[1].upper() == "ДОБАВИТЬ":
         name = parts[2].strip()
         tracks = _get_tracks(user_state)
-        
+
         if any(t["name"].lower() == name.lower() for t in tracks):
             await message.answer(f"⚠️ Трек «{name}» уже есть в списке.")
             return
-        
+
         tracks.append({"name": name, "status": "active"})
         _save_tracks(user_state, tracks)
-        
+
         async with async_session() as session:
             session.add(user_state)
             await session.commit()
-        
+
         await message.answer(
             f"✅ Трек «<b>{name}</b>» добавлен!\n\n"
             f"Всего треков: {len(tracks)}\n"
             f"Смотри: <code>!ТРЕКИ</code>"
         )
         return
-    
+
     # ==================== !ТРЕК УДАЛИТЬ ====================
     if cmd == "!ТРЕК" and len(parts) >= 3 and parts[1].upper() == "УДАЛИТЬ":
         name = parts[2].strip()
         tracks = _get_tracks(user_state)
         new_tracks = [t for t in tracks if t["name"].lower() != name.lower()]
-        
+
         if len(new_tracks) == len(tracks):
             await message.answer(f"❌ Трек «{name}» не найден.\n\nСмотри: <code>!ТРЕКИ</code>")
             return
-        
+
         _save_tracks(user_state, new_tracks)
         async with async_session() as session:
             session.add(user_state)
             await session.commit()
-        
+
         await message.answer(f"🗑 Трек «<b>{name}</b>» удалён.")
         return
-    
+
     # ==================== !ТРЕК ПАУЗА ====================
     if cmd == "!ТРЕК" and len(parts) >= 3 and parts[1].upper() == "ПАУЗА":
         name = parts[2].strip()
         tracks = _get_tracks(user_state)
-        
+
         found = False
         for t in tracks:
             if t["name"].lower() == name.lower():
                 t["status"] = "paused"
                 found = True
                 break
-        
+
         if not found:
             await message.answer(f"❌ Трек «{name}» не найден.")
             return
-        
+
         _save_tracks(user_state, tracks)
         async with async_session() as session:
             session.add(user_state)
             await session.commit()
-        
+
         await message.answer(f"⏸ Трек «<b>{name}</b>» поставлен на паузу.")
         return
 
@@ -1474,8 +1548,8 @@ async def system_commands(message: types.Message):
     if cmd == "!СБРОС":
         await _reset_settings(message)
         return
-    
-       # ==================== НЕИЗВЕСТНАЯ КОМАНДА ====================
+
+    # ==================== НЕИЗВЕСТНАЯ КОМАНДА ====================
     await message.answer(
         f"❓ Неизвестная команда: <code>{message.text[:30]}</code>\n\n"
         f"📋 <b>Доступные !-команды:</b>\n"
@@ -1491,162 +1565,7 @@ async def system_commands(message: types.Message):
     )
 
 
-# ============ УМНЫЙ ОБРАБОТЧИК (ИЗМЕНЕНО — счётчик токенов) ============
-
-@router.message(F.text == "🎛 Меню")
-async def user_menu_button(message: types.Message):
-    """Обработка reply-кнопки Меню для обычных пользователей"""
-    await cmd_system(message)
-
-
-@router.message(F.text == "🔧 Админ-меню")
-async def admin_menu_button(message: types.Message):
-    """Обрабатывает нажатие reply-кнопки Админ-меню (только владелец)"""
-    await _send_admin_menu(message, message.from_user.id)
-
-
-# ============ АДМИН: ВЫБОР РАЗДЕЛА ============
-
-@router.callback_query(F.data == "admin:section:features")
-async def admin_section_features(callback: types.CallbackQuery):
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🆓 Lite", callback_data="admin:tariff:lite")
-    builder.button(text="⚡ Pro", callback_data="admin:tariff:pro")
-    builder.button(text="💎 Business", callback_data="admin:tariff:business")
-    builder.button(text="← Назад", callback_data="admin:menu")
-    builder.adjust(3)
-    
-    await callback.message.edit_text(
-        "⚙️ <b>Настройка фич тарифа</b>\n\nВыбери тариф:",
-        reply_markup=builder.as_markup()
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "admin:section:roles")
-async def admin_section_roles(callback: types.CallbackQuery):
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🆓 Lite", callback_data="admin:roles:tariff:lite:page:0")
-    builder.button(text="⚡ Pro", callback_data="admin:roles:tariff:pro:page:0")
-    builder.button(text="💎 Business", callback_data="admin:roles:tariff:business:page:0")
-    builder.button(text="← Назад", callback_data="admin:menu")
-    builder.adjust(3)
-    
-    await callback.message.edit_text(
-        "🎭 <b>Настройка ролей по тарифам</b>\n\n"
-        "Здесь ты решаешь, какие роли доступны в каждом тарифе.\n\n"
-        "Выбери тариф:",
-        reply_markup=builder.as_markup()
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "admin:commands")
-async def admin_commands_list(callback: types.CallbackQuery):
-    text = (
-        "📋 <b>Админ-команды</b>\n\n"
-        "/admin — главное меню\n"
-        "/upload_prompt — загрузить новый промпт\n"
-        "/settariff [lite/pro/business] — сменить свой тариф\n"
-        "/setkey — ввести BYOK-ключ\n\n"
-        "⚠️ Все эти команды доступны только тебе (владельцу)."
-    )
-    builder = InlineKeyboardBuilder()
-    builder.button(text="← Назад", callback_data="admin:menu")
-    
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
-    await callback.answer()
-
-
-# ============ АДМИН: УПРАВЛЕНИЕ РОЛЯМИ ============
-
-@router.callback_query(F.data.startswith("admin:roles:tariff:"))
-async def admin_roles_list(callback: types.CallbackQuery):
-    parts = callback.data.split(":")
-    tariff = parts[3]
-    page = int(parts[5]) if len(parts) > 5 else 0
-    
-    async with async_session() as session:
-        result = await session.execute(
-            select(Role).where(Role.is_active == True).order_by(Role.id)
-        )
-        all_roles = result.scalars().all()
-        
-        access_result = await session.execute(
-            select(RoleTariffAccess).where(RoleTariffAccess.tariff == tariff)
-        )
-        access_map = {a.role_id: a.access for a in access_result.scalars().all()}
-    
-    icon = "🆓" if tariff == "lite" else "⚡" if tariff == "pro" else "💎"
-    per_page = 10
-    total_pages = (len(all_roles) + per_page - 1) // per_page
-    start = page * per_page
-    end = start + per_page
-    page_roles = all_roles[start:end]
-    
-    text = f"{icon} <b>Роли для тарифа {tariff.upper()}</b> (стр. {page+1}/{total_pages})\n\n"
-    text += "Нажми на роль, чтобы переключить доступ:\n\n"
-    
-    builder = InlineKeyboardBuilder()
-    
-    for role in page_roles:
-        access = access_map.get(role.id, False)
-        status = "✅" if access else "❌"
-        btn_text = f"{status} {role.name[:35]}"
-        builder.button(
-            text=btn_text,
-            callback_data=f"admin:role:toggle:{tariff}:{role.id}"
-        )
-    
-    builder.adjust(1)
-    
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(("← Назад", f"admin:roles:tariff:{tariff}:page:{page-1}"))
-    if page < total_pages - 1:
-        nav_buttons.append(("Вперёд →", f"admin:roles:tariff:{tariff}:page:{page+1}"))
-    nav_buttons.append(("← К тарифам", "admin:section:roles"))
-    
-    for text_btn, data in nav_buttons:
-        builder.button(text=text_btn, callback_data=data)
-    
-    builder.adjust(2, 1)
-    
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("admin:role:toggle:"))
-async def admin_role_toggle(callback: types.CallbackQuery):
-    parts = callback.data.split(":")
-    tariff = parts[3]
-    role_id = int(parts[4])
-    
-    async with async_session() as session:
-        result = await session.execute(
-            select(RoleTariffAccess).where(
-                RoleTariffAccess.role_id == role_id,
-                RoleTariffAccess.tariff == tariff
-            )
-        )
-        access = result.scalar_one_or_none()
-        
-        if access:
-            access.access = not access.access
-            new_status = access.access
-        else:
-            session.add(RoleTariffAccess(role_id=role_id, tariff=tariff, access=True))
-            new_status = True
-        
-        await session.commit()
-    
-    status_text = "включена" if new_status else "выключена"
-    await callback.answer(f"Роль {status_text} для {tariff}")
-    
-    # Обновляем список (редирект на страницу 0 для простоты)
-    callback.data = f"admin:roles:tariff:{tariff}:page:0"
-    await admin_roles_list(callback)
-
+# ============ УМНЫЙ ОБРАБОТЧИК (ИСПРАВЛЕННАЯ ВЕРСИЯ) ============
 
 @router.message()
 async def smart_handler(message: types.Message):
@@ -1680,7 +1599,7 @@ async def smart_handler(message: types.Message):
     # --- Проверяем наличие ключа ---
     default_model = "groq/llama-3.3-70b-versatile"
     provider = default_model.split("/")[0]
-    
+
     api_key, source = await get_api_key(message.from_user.id, provider=provider)
     if not api_key:
         await message.answer(
@@ -1694,16 +1613,15 @@ async def smart_handler(message: types.Message):
 
     # --- ВЫБИРАЕМ РОЛИ И СОБИРАЕМ ПРОМПТ ---
     wait_msg = await message.answer("⏳ Анализирую запрос и выбираю роли...")
-    
+
     _, max_roles = await check_feature_access(user.tariff, "max_roles")
     if max_roles == 0:
         max_roles = 5
-        
+
     selected_roles = await select_roles(message.from_user.id, message.text, max_roles=max_roles)
-    
     system_prompt = await build_system_prompt(message.from_user.id, selected_roles)
 
-        # --- Проверяем пользовательские настройки (!ЖМИ, !РАЗВЕРНИ, !ФОКУС) ---
+    # --- Проверяем пользовательские настройки (!ЖМИ, !РАЗВЕРНИ, !ФОКУС) ---
     response_mode = "normal"
     focus_topic = ""
     async with async_session() as session:
@@ -1714,7 +1632,7 @@ async def smart_handler(message: types.Message):
         if us and us.json_passport:
             response_mode = us.json_passport.get("response_mode", "normal")
             focus_topic = us.json_passport.get("focus", "")
-    
+
     # Модифицируем промпт под режим
     if response_mode == "short":
         system_prompt += "\n\n[РЕЖИМ: КРАТКО] Ответь максимально сжато: 3-5 тезисов, без вступлений и заключений."
@@ -1724,10 +1642,10 @@ async def smart_handler(message: types.Message):
         max_tokens = 2000
     else:
         max_tokens = 1000
-    
+
     if focus_topic:
         system_prompt += f"\n\n[ФОКУС: {focus_topic}] Приоритет этой теме. Адаптируй ответ."
-    
+
     roles_names = ", ".join([r.name.split(":")[0] for r in selected_roles[:3]])
     try:
         await wait_msg.edit_text(f"⚡ Активированы роли: {roles_names}\n⏳ Думаю...")
@@ -1735,7 +1653,8 @@ async def smart_handler(message: types.Message):
         pass
 
     # --- ОТПРАВЛЯЕМ В AI ---
-        answer, success = await ask_llm(
+    # ← ИСПРАВЛЕНИЕ №3: убран лишний отступ
+    answer, success = await ask_llm(
         prompt=message.text,
         user_id=message.from_user.id,
         model=default_model,
@@ -1743,9 +1662,8 @@ async def smart_handler(message: types.Message):
         max_tokens=max_tokens
     )
 
-       # --- Показываем ответ и обновляем счётчик токенов ---
+    # --- Показываем ответ и обновляем счётчик токенов ---
     if success:
-        # ← НОВОЕ: примерно считаем токены и сохраняем в БД
         try:
             tokens_used = count_tokens(message.text) + count_tokens(answer)
             async with async_session() as session:
@@ -1760,13 +1678,18 @@ async def smart_handler(message: types.Message):
                     await session.commit()
         except Exception:
             pass
-        
+
         source_icon = "🔑" if source == "byok" else "⚡"
         roles_info = f"\n\n<i>🎭 Активные роли: {roles_names}</i>" if selected_roles else ""
-        
-        # ← НОВОЕ: разбиваем длинный ответ на части (лимит Telegram 4096)
+
         full_text = f"{source_icon} <b>Ответ AI:</b>\n\n{answer}{roles_info}"
-        
+
+        # ← ИСПРАВЛЕНИЕ №4: удаляем wait_msg перед отправкой ответа
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
+
         if len(full_text) > 4000:
             parts = [answer[i:i+4000] for i in range(0, len(answer), 4000)]
             for idx, part in enumerate(parts):
@@ -1776,5 +1699,9 @@ async def smart_handler(message: types.Message):
         else:
             await message.answer(full_text)
     else:
+        # ← ИСПРАВЛЕНИЕ №4: удаляем wait_msg и при ошибке
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
         await message.answer(f"❌ <b>Ошибка:</b>\n\n{answer}")
-        
