@@ -66,22 +66,23 @@ async def cmd_start(message: types.Message, state: FSMContext):
             keyboard=[[KeyboardButton(text="🔧 Админ-меню")]],
             resize_keyboard=True
         )
-        await message.answer(
-            f"👋 <b>Привет, владелец!</b>\n\n"
-            f"🎫 Твой тариф: <b>{user.tariff.upper()}</b>\n\n"
-            f"📋 Команды:\n"
-            f"/start — начало\n"
-            f"/help — справка\n"
-            f"/register — регистрация\n"
-            f"/roles — доступные роли\n"
-            f"/commands — доступные команды\n"
-            f"/setkey — добавить свой API-ключ (BYOK)\n"
-            f"/admin — настройка тарифов\n"
-            f"/upload_prompt — загрузить промпт\n"
-            f"/settariff — сменить свой тариф\n\n"
-            f"💡 Просто напиши сообщение — и я отвечу через AI.",
-            reply_markup=admin_kb
-        )
+           await message.answer(
+        f"👋 <b>Привет, владелец!</b>\n\n"
+        f"🎫 Твой тариф: <b>{user.tariff.upper()}</b>\n\n"
+        f"📋 Команды:\n"
+        f"/start — начало\n"
+        f"/help — справка\n"
+        f"/system — <b>главное меню</b> (треки, фокус, прогресс)\n"
+        f"/register — регистрация\n"
+        f"/roles — доступные роли\n"
+        f"/commands — доступные команды\n"
+        f"/setkey — добавить свой API-ключ (BYOK)\n"
+        f"/admin — настройка тарифов\n"
+        f"/upload_prompt — загрузить промпт\n"
+        f"/settariff — сменить свой тариф\n\n"
+        f"💡 Просто напиши сообщение — и я отвечу через AI.",
+        reply_markup=admin_kb
+    )
         return
     
         await message.answer(
@@ -1019,8 +1020,10 @@ def _get_tracks(user_state: UserState) -> list:
 
 
 def _save_tracks(user_state: UserState, tracks: list):
-    """Сохраняет треки обратно в объект состояния"""
-    user_state.tracks = tracks
+    """Сохраняет треки обратно в объект состояния (force dirty для JSON)"""
+    import copy
+    # Deep copy заставляет SQLAlchemy увидеть изменение
+    user_state.tracks = copy.deepcopy(tracks)
 
 
 # ============ ИНТЕРАКТИВНОЕ МЕНЮ СИСТЕМЫ (/system) ============
@@ -1053,7 +1056,7 @@ async def cmd_system(message: types.Message):
 
 @router.callback_query(F.data == "sys:tracks:menu")
 async def sys_tracks_menu(callback: types.CallbackQuery):
-    """Показывает список треков с кнопками действий под КАЖДЫМ треком"""
+    """Показывает список треков. Название — текст, кнопки — только действия."""
     async with async_session() as session:
         result = await session.execute(
             select(UserState).where(UserState.user_id == callback.from_user.id)
@@ -1069,7 +1072,6 @@ async def sys_tracks_menu(callback: types.CallbackQuery):
         f"🟢 Активных: {len(active)} | ⏸ На паузе: {len(paused)}\n\n"
     )
     
-    # Собираем клавиатуру вручную (ряд за рядом)
     keyboard = []
     all_tracks = active + paused
     
@@ -1078,13 +1080,10 @@ async def sys_tracks_menu(callback: types.CallbackQuery):
     else:
         for idx, t in enumerate(all_tracks):
             icon = "🟢" if t.get("status") == "active" else "⏸"
+            # ← Название трека — просто текст в сообщении, НЕ кнопка
+            text += f"{icon} <b>{t['name']}</b>\n\n"
             
-            # Ряд 1: Название трека (кнопка-заглушка, некликабельная по сути)
-            keyboard.append([
-                InlineKeyboardButton(text=f"{icon} {t['name']}", callback_data="sys:track:noop")
-            ])
-            
-            # Ряд 2: Действия под этим треком
+            # Кнопки действий под этим треком (один ряд)
             action_row = []
             if t.get("status") == "active":
                 action_row.append(InlineKeyboardButton(text="⏸ Пауза", callback_data=f"sys:track:pause:{idx}"))
@@ -1093,7 +1092,6 @@ async def sys_tracks_menu(callback: types.CallbackQuery):
             action_row.append(InlineKeyboardButton(text="❌ Удалить", callback_data=f"sys:track:delete:{idx}"))
             keyboard.append(action_row)
     
-    # Нижние кнопки
     keyboard.append([InlineKeyboardButton(text="➕ Добавить трек", callback_data="sys:tracks:add")])
     keyboard.append([InlineKeyboardButton(text="← Назад в меню", callback_data="sys:main")])
     
@@ -1251,12 +1249,6 @@ async def sys_ai_mode_stub(callback: types.CallbackQuery):
 async def sys_profile_stub(callback: types.CallbackQuery):
     await callback.answer("📋 Мои данные — в разработке", show_alert=True)
     
-
-@router.callback_query(F.data == "sys:track:noop")
-async def sys_track_noop(callback: types.CallbackQuery):
-    """Нажатие на название трека (ничего не делает, просто информирует)"""
-    await callback.answer("Это твой трек 🙂 Нажми ⏸ или ❌ под ним")
-
 
 # ============ НАЗАД В ГЛАВНОЕ МЕНЮ ============
 
