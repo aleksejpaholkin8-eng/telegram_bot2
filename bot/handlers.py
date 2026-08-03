@@ -687,9 +687,99 @@ async def cmd_admin(message: types.Message):
     await _send_admin_menu(message, message.from_user.id)
 
 
+# ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ АДМИН-ПАНЕЛИ ============
+
+async def _render_tariff_features(target_message, tariff: str):
+    """Рендерит список фич тарифа (без привязки к callback)"""
+    async with async_session() as session:
+        result = await session.execute(
+            select(TariffFeature).where(TariffFeature.tariff == tariff)
+        )
+        features = result.scalars().all()
+    
+    icon = "🆓" if tariff == "lite" else "⚡" if tariff == "pro" else "💎"
+    text = f"{icon} <b>Настройки тарифа {tariff.upper()}</b>\n\n"
+    
+    builder = InlineKeyboardBuilder()
+    
+    for feat in features:
+        status = "✅ Вкл" if feat.access else "❌ Выкл"
+        text += f"<b>{feat.feature}</b>\n"
+        text += f"   Статус: {status} | Лимит: {feat.limit_value or '—'}\n\n"
+        
+        action = "off" if feat.access else "on"
+        btn_icon = "❌" if feat.access else "✅"
+        builder.button(
+            text=f"{btn_icon} {feat.feature}",
+            callback_data=f"admin:toggle:{tariff}:{feat.feature}:{action}"
+        )
+        builder.button(
+            text="📝 Лимит",
+            callback_data=f"admin:limit:{tariff}:{feat.feature}"
+        )
+    
+    builder.button(text="← Назад в меню", callback_data="admin:menu")
+    builder.adjust(2)
+    
+    await target_message.edit_text(text, reply_markup=builder.as_markup())
+
+
+async def _render_roles_list(target_message, tariff: str, page: int = 0):
+    """Рендерит список ролей для тарифа (без привязки к callback)"""
+    async with async_session() as session:
+        result = await session.execute(
+            select(Role).where(Role.is_active == True).order_by(Role.id)
+        )
+        all_roles = result.scalars().all()
+        
+        access_result = await session.execute(
+            select(RoleTariffAccess).where(RoleTariffAccess.tariff == tariff)
+        )
+        access_map = {a.role_id: a.access for a in access_result.scalars().all()}
+    
+    icon = "🆓" if tariff == "lite" else "⚡" if tariff == "pro" else "💎"
+    per_page = 10
+    total_pages = (len(all_roles) + per_page - 1) // per_page
+    start = page * per_page
+    end = start + per_page
+    page_roles = all_roles[start:end]
+    
+    text = f"{icon} <b>Роли для тарифа {tariff.upper()}</b> (стр. {page+1}/{total_pages})\n\n"
+    text += "Нажми на роль, чтобы переключить доступ:\n\n"
+    
+    builder = InlineKeyboardBuilder()
+    
+    for role in page_roles:
+        access = access_map.get(role.id, False)
+        status = "✅" if access else "❌"
+        btn_text = f"{status} {role.name[:35]}"
+        builder.button(
+            text=btn_text,
+            callback_data=f"admin:role:toggle:{tariff}:{role.id}"
+        )
+    
+    builder.adjust(1)
+    
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(("← Назад", f"admin:roles:tariff:{tariff}:page:{page-1}"))
+    if page < total_pages - 1:
+        nav_buttons.append(("Вперёд →", f"admin:roles:tariff:{tariff}:page:{page+1}"))
+    nav_buttons.append(("← К тарифам", "admin:section:roles"))
+    
+    for text_btn, data in nav_buttons:
+        builder.button(text=text_btn, callback_data=data)
+    
+    builder.adjust(2, 1)
+    
+    await target_message.edit_text(text, reply_markup=builder.as_markup())
+
+
 @router.callback_query(F.data.startswith("admin:tariff:"))
 async def admin_show_tariff(callback: types.CallbackQuery):
     tariff = callback.data.split(":")[2]
+    await _render_tariff_features(callback.message, tariff)
+    await callback.answer()
 
     async with async_session() as session:
         result = await session.execute(
@@ -748,10 +838,8 @@ async def admin_toggle_feature(callback: types.CallbackQuery):
     status = "включена" if new_access else "выключена"
     await callback.answer(f"✅ {feature} {status} для {tariff}")
 
-    # Обновляем экран
-    callback.data = f"admin:tariff:{tariff}"
-    await admin_show_tariff(callback)
-
+       # Обновляем экран
+    await _render_tariff_features(callback.message, tariff)
 
 @router.callback_query(F.data.startswith("admin:limit:"))
 async def admin_edit_limit_start(callback: types.CallbackQuery, state: FSMContext):
@@ -871,6 +959,8 @@ async def admin_roles_list(callback: types.CallbackQuery):
     parts = callback.data.split(":")
     tariff = parts[3]
     page = int(parts[5]) if len(parts) > 5 else 0
+    await _render_roles_list(callback.message, tariff, page)
+    await callback.answer()
 
     async with async_session() as session:
         result = await session.execute(
@@ -949,9 +1039,8 @@ async def admin_role_toggle(callback: types.CallbackQuery):
     status_text = "включена" if new_status else "выключена"
     await callback.answer(f"Роль {status_text} для {tariff}")
 
-    callback.data = f"admin:roles:tariff:{tariff}:page:0"
-    await admin_roles_list(callback)
-
+        # Обновляем список
+    await _render_roles_list(callback.message, tariff, 0)
 
 # ============ FSM: РЕГИСТРАЦИЯ ============
 
@@ -1233,7 +1322,6 @@ async def sys_track_action(callback: types.CallbackQuery):
     await callback.answer(msg)
 
     # Обновляем меню треков
-    callback.data = "sys:tracks:menu"
     await sys_tracks_menu(callback)
 
 
