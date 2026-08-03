@@ -1,5 +1,5 @@
 # ============================================
-# ВЕБ-ПОИСК ЧЕРЕЗ DUCKDUCKGO (с retry и fallback)
+# ВЕБ-ПОИСК: DuckDuckGo + SearXNG fallback
 # ============================================
 
 import asyncio
@@ -11,62 +11,120 @@ try:
     DDGS_AVAILABLE = True
 except ImportError:
     DDGS_AVAILABLE = False
-    logging.warning("duckduckgo-search не установлен. Веб-поиск недоступен.")
+
+try:
+    import aiohttp
+    AIOHTTP_AVAILABLE = True
+except ImportError:
+    AIOHTTP_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
+
+
+async def _search_duckduckgo(query: str, max_results: int = 5) -> Tuple[List[dict], str]:
+    """Пробуем DuckDuckGo (часто банит облачные IP)"""
+    if not DDGS_AVAILABLE:
+        return [], "DDGS не установлен"
+    
+    for attempt in range(2):
+        try:
+            with DDGS(headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+            }) as ddgs:
+                results = list(ddgs.text(query, max_results=max_results, backend="lite"))
+                
+                if not results:
+                    return [], "Ничего не найдено"
+                
+                return [{
+                    "title": r.get("title", "Без названия"),
+                    "url": r.get("href", ""),
+                    "snippet": r.get("body", "")
+                } for r in results], ""
+                
+        except Exception as e:
+            logger.warning(f"DuckDuckGo попытка {attempt+1} не удалась: {e}")
+            if attempt == 0:
+                await asyncio.sleep(2)
+    
+    return [], "DuckDuckGo недоступен"
+
+
+async def _search_searxng(query: str, max_results: int = 5) -> Tuple[List[dict], str]:
+    """
+    Fallback через публичные SearXNG инстансы.
+    SearXNG — это метапоисковик, который агрегирует Google, Bing, DuckDuckGo.
+    """
+    if not AIOHTTP_AVAILABLE:
+        return [], "aiohttp не установлен"
+    
+    # Список публичных SearXNG инстансов (проверены на работоспособность)
+    instances = [
+        "https://search.sapti.me",
+        "https://search.bus-hit.me",
+        "https://search.projectsegfault.com",
+    ]
+    
+    for instance in instances:
+        try:
+            url = f"{instance}/search"
+            params = {
+                "q": query,
+                "format": "json",
+                "categories": "general",
+                "language": "ru-RU"
+            }
+            
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, params=params, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                }) as response:
+                    
+                    if response.status != 200:
+                        continue
+                    
+                    data = await response.json()
+                    results = data.get("results", [])[:max_results]
+                    
+                    if not results:
+                        continue
+                    
+                    return [{
+                        "title": r.get("title", "Без названия"),
+                        "url": r.get("url", ""),
+                        "snippet": r.get("content", "")
+                    } for r in results], ""
+                    
+        except Exception as e:
+            logger.warning(f"SearXNG {instance} не сработал: {e}")
+            continue
+    
+    return [], "Все SearXNG инстансы недоступны"
 
 
 async def web_search(query: str, max_results: int = 5) -> Tuple[List[dict], str]:
     """
-    Ищет в интернете через DuckDuckGo.
-    С retry, заголовками и fallback на lite-режим.
+    Универсальный поиск: сначала DuckDuckGo, потом SearXNG fallback.
     """
-    if not DDGS_AVAILABLE:
-        return [], "❌ Модуль duckduckgo-search не установлен."
+    # Попытка 1: DuckDuckGo
+    results, error = await _search_duckduckgo(query, max_results)
+    if results:
+        return results, ""
     
-    # Пробуем несколько раз с задержкой (DuckDuckGo иногда банит по IP)
-    for attempt in range(3):
-        try:
-            # headers помогают обойти базовую блокировку ботов
-            with DDGS(headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0"
-            }) as ddgs:
-                
-                # Пробуем lite-режим (меньше защиты от ботов)
-                results = list(ddgs.text(
-                    query, 
-                    max_results=max_results,
-                    backend="lite"  # ← lite-режим, проще для обхода блокировок
-                ))
-                
-                if not results:
-                    return [], "🔍 Ничего не найдено."
-                
-                formatted = []
-                for r in results:
-                    formatted.append({
-                        "title": r.get("title", "Без названия"),
-                        "url": r.get("href", ""),
-                        "snippet": r.get("body", "")
-                    })
-                
-                return formatted, ""
-                
-        except Exception as e:
-            error_text = str(e)
-            logging.warning(f"Попытка {attempt+1}/3 поиска не удалась: {error_text[:100]}")
-            
-            if "202" in error_text or "Ratelimit" in error_text or "ratelimit" in error_text:
-                if attempt < 2:
-                    await asyncio.sleep(2 + attempt * 2)  # Ждём 2с, потом 4с
-                    continue
-            
-            # Если это не rate limit или последняя попытка — возвращаем ошибку
-            return [], (
-                "❌ <b>DuckDuckGo временно недоступен</b>\n\n"
-                "Возможные причины:\n"
-                "• Слишком много запросов с этого сервера\n"
-                "• DuckDuckGo блокирует облачные IP (Railway, AWS и т.д.)\n\n"
-                "💡 <b>Решение:</b> попробуй позже или используй веб-поиск "
-                "через другой сервис (например, SerpAPI — платный, но стабильный)."
-            )
+    logger.info("DuckDuckGo не сработал, пробуем SearXNG...")
     
-    return [], "❌ Не удалось выполнить поиск после 3 попыток."
+    # Попытка 2: SearXNG
+    results, error2 = await _search_searxng(query, max_results)
+    if results:
+        return results, ""
+    
+    # Ничего не сработало
+    return [], (
+        "❌ <b>Веб-поиск временно недоступен</b>\n\n"
+        "DuckDuckGo и SearXNG не отвечают с этого сервера.\n\n"
+        "💡 <b>Решения:</b>\n"
+        "1. Попробуй позже (возможно, временный бан IP)\n"
+        "2. Добавь SerpAPI ключ в переменные окружения (стабильно, но платно)\n"
+        "3. Используй поиск через AI-модели с веб-доступом (Gemini, Perplexity)"
+    )
