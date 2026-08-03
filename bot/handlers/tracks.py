@@ -167,8 +167,7 @@ async def sys_track_action(callback: types.CallbackQuery):
         name = track["name"]
 
         if action == "delete":
-            # Удаляем из ИСХОДНОГО списка tracks (по имени, чтобы точно найти)
-            original_tracks = [t for t in tracks if t["name"] != name]
+            tracks = [t for t in tracks if t["name"] != name]
             msg = f"🗑 Трек «{name}» удалён"
 
         elif action == "pause":
