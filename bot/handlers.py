@@ -66,7 +66,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
             keyboard=[[KeyboardButton(text="🔧 Админ-меню")]],
             resize_keyboard=True
         )
-           await message.answer(
+
+        await message.answer(
         f"👋 <b>Привет, владелец!</b>\n\n"
         f"🎫 Твой тариф: <b>{user.tariff.upper()}</b>\n\n"
         f"📋 Команды:\n"
