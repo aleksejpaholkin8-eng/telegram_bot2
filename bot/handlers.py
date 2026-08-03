@@ -109,6 +109,7 @@ async def cmd_help(message: types.Message):
         "• /commands — показать команды\n"
         "• /setkey — ввести свой API-ключ (BYOK)\n\n"
         "• /search [запрос] — поиск в интернете (Pro/Business)\n"
+        "• /searchai [запрос] — поиск в интернете + ответ AI (Pro/Business)\n"
         "🎫 Тарифы:\n"
         "🆓 Lite — команды и эхо, без AI\n"
         "⚡ Pro — AI через ключ владельца или свой (BYOK)\n"
@@ -310,6 +311,129 @@ async def cmd_search(message: types.Message):
             await message.answer(part, disable_web_page_preview=True)
     else:
         await wait_msg.edit_text(text, disable_web_page_preview=True)
+
+@router.message(Command(commands="searchai"))
+async def cmd_searchai(message: types.Message):
+    """
+    Поиск в интернете + ответ AI на основе найденной информации.
+    Доступно в Pro/Business.
+    """
+    user = await get_or_create_user(message)
+    
+    # Проверяем, включён ли веб-поиск в тарифе
+    has_access, _ = await check_feature_access(user.tariff, "web_search")
+    if not has_access:
+        await message.answer(
+            "🔒 <b>Поиск + AI недоступен</b>\n\n"
+            f"В тарифе {user.tariff.upper()} веб-поиск отключён.\n"
+            "Админ может включить через /admin → ⚙️ Фичи тарифа."
+        )
+        return
+    
+    # Парсим запрос
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer(
+            "🔍 <b>Поиск + AI</b>\n\n"
+            "Формат: <code>/searchai запрос</code>\n"
+            "Примеры:\n"
+            "<code>/searchai актуальные зарплаты python разработчик</code>\n"
+            "<code>/searchai новости DeepSeek 2026</code>\n\n"
+            "Бот найдёт информацию и даст развёрнутый ответ через AI с указанием источников."
+        )
+        return
+    
+    query = args[1]
+    wait_msg = await message.answer(f"🔍 Ищу в интернете: <i>{query}</i>...")
+    
+    # --- 1. ПОИСК ---
+    results, error = await web_search(query, max_results=5)
+    
+    if error:
+        await wait_msg.edit_text(
+            f"❌ <b>Поиск не удался</b>\n\n{error}\n\n"
+            f"Попробуй позже или задай вопрос без поиска — просто напиши текст."
+        )
+        return
+    
+    # --- 2. ФОРМИРУЕМ КОНТЕКСТ ПОИСКА ---
+    search_context = "\n\n=== РЕЗУЛЬТАТЫ ПОИСКА В ИНТЕРНЕТЕ ===\n"
+    for i, r in enumerate(results, 1):
+        search_context += f"{i}. {r['title']}\n{r['snippet'][:400]}\nИсточник: {r['url']}\n\n"
+    search_context += "=== КОНЕЦ ПОИСКА ===\n"
+    
+    await wait_msg.edit_text(f"🔍 Найдено {len(results)} результатов. Анализирую через AI...")
+    
+    # --- 3. ВЫБИРАЕМ РОЛИ И СОБИРАЕМ ПРОМПТ ---
+    _, max_roles = await check_feature_access(user.tariff, "max_roles")
+    if max_roles == 0:
+        max_roles = 5
+        
+    selected_roles = await select_roles(message.from_user.id, query, max_roles=max_roles)
+    base_prompt = await build_system_prompt(message.from_user.id, selected_roles)
+    
+    # Добавляем результаты поиска к системному промпту
+    system_prompt = (
+        base_prompt + "\n\n" +
+        search_context +
+        "\nИНСТРУКЦИЯ ДЛЯ AI: Ответь на вопрос пользователя, используя информацию из результатов поиска выше. "
+        "Если информации недостаточно — скажи об этом. В конце ответа перечисли источники (номера)."
+    )
+    
+    # --- 4. ОТПРАВЛЯЕМ В AI ---
+    default_model = "groq/llama-3.3-70b-versatile"
+    provider = default_model.split("/")[0]
+    
+    api_key, source = await get_api_key(message.from_user.id, provider=provider)
+    if not api_key:
+        await message.answer("🔑 Нет API-ключа для AI.")
+        return
+    
+    answer, success = await ask_llm(
+        prompt=query,
+        user_id=message.from_user.id,
+        model=default_model,
+        system_prompt=system_prompt,
+        max_tokens=1500
+    )
+    
+    # --- 5. ПОКАЗЫВАЕМ ОТВЕТ ---
+    if success:
+        # Считаем токены (включая поисковый контекст)
+        try:
+            tokens_used = count_tokens(query) + count_tokens(answer) + count_tokens(search_context)
+            async with async_session() as session:
+                result = await session.execute(
+                    select(UserState).where(UserState.user_id == message.from_user.id)
+                )
+                us = result.scalar_one_or_none()
+                if us:
+                    counters = us.counters or {}
+                    counters["daily_tokens"] = counters.get("daily_tokens", 0) + tokens_used
+                    us.counters = counters
+                    await session.commit()
+        except Exception:
+            pass
+        
+        # Формируем источники
+        sources = "\n\n📚 <b>Источники:</b>\n"
+        for i, r in enumerate(results[:3], 1):
+            sources += f"{i}. <a href='{r['url']}'>{r['title'][:60]}</a>\n"
+        
+        full_text = f"🔍 <b>Ответ AI (с поиском):</b>\n\n{answer}{sources}"
+        
+        # Разбиваем, если длинно
+        if len(full_text) > 4000:
+            await wait_msg.delete()
+            parts = [answer[i:i+3800] for i in range(0, len(answer), 3800)]
+            for idx, part in enumerate(parts):
+                prefix = f"🔍 <b>Ответ AI (часть {idx+1}/{len(parts)}):</b>\n\n"
+                await message.answer(prefix + part, disable_web_page_preview=True)
+            await message.answer(sources, disable_web_page_preview=True)
+        else:
+            await wait_msg.edit_text(full_text, disable_web_page_preview=True)
+    else:
+        await wait_msg.edit_text(f"❌ <b>Ошибка AI:</b>\n\n{answer}")
 
 
 @router.message(Command(commands="settariff"))
