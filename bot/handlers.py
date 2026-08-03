@@ -1053,7 +1053,7 @@ async def cmd_system(message: types.Message):
 
 @router.callback_query(F.data == "sys:tracks:menu")
 async def sys_tracks_menu(callback: types.CallbackQuery):
-    """Показывает список треков с кнопками действий у каждого"""
+    """Показывает список треков с кнопками действий под КАЖДЫМ треком"""
     async with async_session() as session:
         result = await session.execute(
             select(UserState).where(UserState.user_id == callback.from_user.id)
@@ -1069,35 +1069,38 @@ async def sys_tracks_menu(callback: types.CallbackQuery):
         f"🟢 Активных: {len(active)} | ⏸ На паузе: {len(paused)}\n\n"
     )
     
-    builder = InlineKeyboardBuilder()
-    
-    # Выводим треки с кнопками действий
+    # Собираем клавиатуру вручную (ряд за рядом)
+    keyboard = []
     all_tracks = active + paused
+    
     if not all_tracks:
         text += "У тебя пока нет треков.\n"
     else:
-        text += "<b>Твои треки:</b>\n"
         for idx, t in enumerate(all_tracks):
             icon = "🟢" if t.get("status") == "active" else "⏸"
-            text += f"{icon} {t['name']}\n"
             
-            # Кнопки под каждым треком (в одном ряду)
-            builder.button(text="❌", callback_data=f"sys:track:delete:{idx}")
+            # Ряд 1: Название трека (кнопка-заглушка, некликабельная по сути)
+            keyboard.append([
+                InlineKeyboardButton(text=f"{icon} {t['name']}", callback_data="sys:track:noop")
+            ])
+            
+            # Ряд 2: Действия под этим треком
+            action_row = []
             if t.get("status") == "active":
-                builder.button(text="⏸", callback_data=f"sys:track:pause:{idx}")
+                action_row.append(InlineKeyboardButton(text="⏸ Пауза", callback_data=f"sys:track:pause:{idx}"))
             else:
-                builder.button(text="▶️", callback_data=f"sys:track:resume:{idx}")
-        
-        # Настраиваем: 2 кнопки на каждый трек (❌ + ⏸/▶️)
-        # adjust(2) повторяется для каждого трека
-        builder.adjust(*[2 for _ in all_tracks])
+                action_row.append(InlineKeyboardButton(text="▶️ Возобновить", callback_data=f"sys:track:resume:{idx}"))
+            action_row.append(InlineKeyboardButton(text="❌ Удалить", callback_data=f"sys:track:delete:{idx}"))
+            keyboard.append(action_row)
     
-    # Отдельные кнопки внизу
-    builder.button(text="➕ Добавить трек", callback_data="sys:tracks:add")
-    builder.button(text="← Назад в меню", callback_data="sys:main")
-    builder.adjust(1, 1)  # Каждая кнопка в отдельном ряду
+    # Нижние кнопки
+    keyboard.append([InlineKeyboardButton(text="➕ Добавить трек", callback_data="sys:tracks:add")])
+    keyboard.append([InlineKeyboardButton(text="← Назад в меню", callback_data="sys:main")])
     
-    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    await callback.message.edit_text(
+        text, 
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
+    )
     await callback.answer()
 
 
@@ -1249,6 +1252,12 @@ async def sys_profile_stub(callback: types.CallbackQuery):
     await callback.answer("📋 Мои данные — в разработке", show_alert=True)
     
 
+@router.callback_query(F.data == "sys:track:noop")
+async def sys_track_noop(callback: types.CallbackQuery):
+    """Нажатие на название трека (ничего не делает, просто информирует)"""
+    await callback.answer("Это твой трек 🙂 Нажми ⏸ или ❌ под ним")
+
+
 # ============ НАЗАД В ГЛАВНОЕ МЕНЮ ============
 
 @router.callback_query(F.data == "sys:main")
@@ -1256,6 +1265,68 @@ async def sys_back_to_main(callback: types.CallbackQuery):
     """Возвращает в главное меню системы"""
     await cmd_system(callback.message)
     await callback.answer()
+
+
+async def _set_response_mode(message: types.Message, mode: str):
+    """Сохраняет режим ответа (short/long) в json_passport"""
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserState).where(UserState.user_id == message.from_user.id)
+        )
+        us = result.scalar_one_or_none()
+        if not us:
+            us = UserState(user_id=message.from_user.id, json_passport={}, tracks=[], counters={})
+            session.add(us)
+        passport = us.json_passport or {}
+        passport["response_mode"] = mode
+        us.json_passport = passport
+        await session.commit()
+    
+    mode_text = "📄 Сжатый (только тезисы)" if mode == "short" else "📖 Развёрнутый (полный ответ)"
+    await message.answer(
+        f"✅ Режим ответа: <b>{mode_text}</b>\n\n"
+        f"Следующий запрос к AI будет в этом формате.\n"
+        f"Сбросить: <code>!СБРОС</code>"
+    )
+
+
+async def _set_focus(message: types.Message, topic: str):
+    """Сохраняет фокус-тему в json_passport"""
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserState).where(UserState.user_id == message.from_user.id)
+        )
+        us = result.scalar_one_or_none()
+        if not us:
+            us = UserState(user_id=message.from_user.id, json_passport={}, tracks=[], counters={})
+            session.add(us)
+        passport = us.json_passport or {}
+        passport["focus"] = topic
+        us.json_passport = passport
+        await session.commit()
+    
+    await message.answer(
+        f"🎯 <b>Фокус установлен:</b> <i>{topic}</i>\n\n"
+        f"AI будет приоритизировать эту тему в следующих ответах.\n"
+        f"Сбросить: <code>!СБРОС</code>"
+    )
+
+
+async def _reset_settings(message: types.Message):
+    """Сбрасывает режим и фокус"""
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserState).where(UserState.user_id == message.from_user.id)
+        )
+        us = result.scalar_one_or_none()
+        if us:
+            passport = us.json_passport or {}
+            passport.pop("response_mode", None)
+            passport.pop("focus", None)
+            us.json_passport = passport
+            await session.commit()
+    
+    await message.answer("🔄 <b>Настройки сброшены.</b>\n\nСтандартный режим, фокус снят.")
 
 
 @router.message(F.text.startswith("!"))
@@ -1380,15 +1451,43 @@ async def system_commands(message: types.Message):
         
         await message.answer(f"⏸ Трек «<b>{name}</b>» поставлен на паузу.")
         return
+
+    # ==================== !ЖМИ / !РАЗВЕРНИ / !ФОКУС / !СБРОС ====================
+    if cmd == "!ЖМИ":
+        await _set_response_mode(message, "short")
+        return
+    if cmd == "!РАЗВЕРНИ":
+        await _set_response_mode(message, "long")
+        return
+    if cmd == "!ФОКУС":
+        topic = parts[1] if len(parts) > 1 else ""
+        if not topic:
+            await message.answer(
+                "🎯 <b>!ФОКУС</b>\n\n"
+                "Укажи тему:\n"
+                "<code>!ФОКУС [тема]</code>\n\n"
+                "Пример: <code>!ФОКУС Корея</code>"
+            )
+            return
+        await _set_focus(message, topic)
+        return
+    if cmd == "!СБРОС":
+        await _reset_settings(message)
+        return
     
-    # ==================== НЕИЗВЕСТНАЯ КОМАНДА ====================
+       # ==================== НЕИЗВЕСТНАЯ КОМАНДА ====================
     await message.answer(
         f"❓ Неизвестная команда: <code>{message.text[:30]}</code>\n\n"
         f"📋 <b>Доступные !-команды:</b>\n"
         f"<code>!ТРЕКИ</code> — список треков\n"
         f"<code>!ТРЕК ДОБАВИТЬ Название</code>\n"
         f"<code>!ТРЕК УДАЛИТЬ Название</code>\n"
-        f"<code>!ТРЕК ПАУЗА Название</code>"
+        f"<code>!ТРЕК ПАУЗА Название</code>\n"
+        f"<code>!ЖМИ</code> — сжатый ответ\n"
+        f"<code>!РАЗВЕРНИ</code> — подробный ответ\n"
+        f"<code>!ФОКУС [тема]</code> — приоритет темы\n"
+        f"<code>!СБРОС</code> — сброс настроек\n\n"
+        f"🎛 Или используй кнопки: <code>/system</code>"
     )
 
 
@@ -1597,6 +1696,31 @@ async def smart_handler(message: types.Message):
     selected_roles = await select_roles(message.from_user.id, message.text, max_roles=max_roles)
     
     system_prompt = await build_system_prompt(message.from_user.id, selected_roles)
+
+        # --- Проверяем пользовательские настройки (!ЖМИ, !РАЗВЕРНИ, !ФОКУС) ---
+    response_mode = "normal"
+    focus_topic = ""
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserState).where(UserState.user_id == message.from_user.id)
+        )
+        us = result.scalar_one_or_none()
+        if us and us.json_passport:
+            response_mode = us.json_passport.get("response_mode", "normal")
+            focus_topic = us.json_passport.get("focus", "")
+    
+    # Модифицируем промпт под режим
+    if response_mode == "short":
+        system_prompt += "\n\n[РЕЖИМ: КРАТКО] Ответь максимально сжато: 3-5 тезисов, без вступлений и заключений."
+        max_tokens = 500
+    elif response_mode == "long":
+        system_prompt += "\n\n[РЕЖИМ: ПОДРОБНО] Ответь максимально развёрнуто, с примерами и деталями."
+        max_tokens = 2000
+    else:
+        max_tokens = 1000
+    
+    if focus_topic:
+        system_prompt += f"\n\n[ФОКУС: {focus_topic}] Приоритет этой теме. Адаптируй ответ."
     
     roles_names = ", ".join([r.name.split(":")[0] for r in selected_roles[:3]])
     try:
@@ -1605,11 +1729,12 @@ async def smart_handler(message: types.Message):
         pass
 
     # --- ОТПРАВЛЯЕМ В AI ---
-    answer, success = await ask_llm(
+           answer, success = await ask_llm(
         prompt=message.text,
         user_id=message.from_user.id,
         model=default_model,
-        system_prompt=system_prompt
+        system_prompt=system_prompt,
+        max_tokens=max_tokens
     )
 
        # --- Показываем ответ и обновляем счётчик токенов ---
