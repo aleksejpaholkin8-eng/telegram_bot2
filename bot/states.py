@@ -1,37 +1,34 @@
 # ============================================
-# СОСТОЯНИЯ FSM (Finite State Machine)
+# СОСТОЯНИЯ FSM
 # ============================================
-# FSM — это когда бот помнит, на каком шаге диалога находится пользователь.
-# Например: "жду имя" → "жду цель" → "готово"
 
 from aiogram.fsm.state import State, StatesGroup
 
 
 class UserRegistration(StatesGroup):
-    """Диалог регистрации нового пользователя"""
-    waiting_for_name = State()      # Шаг 1: ждём имя
-    waiting_for_goal = State()      # Шаг 2: ждём цель
-    waiting_for_confirm = State()   # Шаг 3: ждём подтверждения
+    """Диалог регистрации"""
+    waiting_for_name = State()
+    waiting_for_goal = State()
+    waiting_for_confirm = State()
 
 
 class ByokInput(StatesGroup):
-    """Диалог ввода своего API-ключа (BYOK)"""
+    """Ввод своего API-ключа"""
     waiting_for_key = State()
 
 
-# ============ НОВОЕ: Шаг 5.4 ============
 class UploadPrompt(StatesGroup):
-    """
-    Диалог загрузки промпта.
-    Раньше бот ловил ЛЮБОЕ длинное сообщение как промпт — это баг.
-    Теперь он ждёт промпт ТОЛЬКО после команды /upload_prompt.
-    """
+    """Диалог загрузки промпта"""
     waiting_for_file = State()
 
 
 class AdminEditLimit(StatesGroup):
-    """
-    Диалог изменения лимита в админ-панели.
-    Бот спрашивает число → пользователь вводит → бот сохраняет.
-    """
+    """Изменение лимита в админ-панели"""
     waiting_for_value = State()
+
+
+# ============ НОВОЕ: Интерактивное меню треков ============
+class TrackMenu(StatesGroup):
+    """Диалог управления треками через кнопки"""
+    waiting_for_name = State()      # Ждём название трека (добавить/удалить/пауза)
+    action = State()                 # Какое действие выполняем (add/delete/pause)
