@@ -1276,7 +1276,7 @@ async def sys_tracks_menu(callback: types.CallbackQuery):
     keyboard.append([InlineKeyboardButton(text="➕ Добавить трек", callback_data="sys:tracks:add")])
     keyboard.append([InlineKeyboardButton(text="← Назад в меню", callback_data="sys:main")])
 
-        try:
+    try:
         await callback.message.edit_text(
             text, 
             reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
