@@ -1,25 +1,17 @@
 # ============================================
 # ОБЩИЕ КОМАНДЫ И FSM-ДИАЛОГИ
 # ============================================
-# Здесь:
-# • /start, /help — базовые команды
-# • /register — пошаговая регистрация (FSM)
-# • /setkey — ввод BYOK-ключа (FSM)
-# • get_or_create_user — вспомогательная функция
 
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import (
-    ReplyKeyboardMarkup, 
-    KeyboardButton,
-    InlineKeyboardBuilder
-)
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 
 from bot.states import UserRegistration, ByokInput
 from db.database import async_session
-from db.models import User, UserState
+from db.models import User, UserState, UserApiKey
 from services.encryption import encrypt_key
 from config.settings import settings
 
