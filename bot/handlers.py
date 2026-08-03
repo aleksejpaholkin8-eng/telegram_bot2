@@ -103,21 +103,18 @@ async def cmd_start(message: types.Message, state: FSMContext):
 async def cmd_help(message: types.Message):
     await message.answer(
         "📖 <b>Справка</b>\n\n"
+        "🎛 <b>Главное меню:</b> /system\n\n"
+        "📋 <b>Команды:</b>\n"
         "• /start — перезапустить\n"
         "• /help — это сообщение\n"
-        "• /register — сохранить имя и цель в базу\n"
+        "• /system — управление треками, фокус, прогресс (кнопки)\n"
+        "• /register — сохранить имя и цель\n"
         "• /roles — показать роли твоего тарифа\n"
-        "• /commands — показать команды\n"
-        "• /setkey — ввести свой API-ключ (BYOK)\n\n"
+        "• /commands — список системных команд\n"
+        "• /setkey — ввести свой API-ключ (BYOK)\n"
         "• /search [запрос] — поиск в интернете (Pro/Business)\n"
-        "• /searchai [запрос] — поиск в интернете + ответ AI (Pro/Business)\n"
-        "• /system — главное меню системы (кнопки)\n"
-        "\n📋 <b>!-Команды системы:</b>\n"
-        "• !ТРЕКИ — список треков\n"
-        "• !ТРЕК ДОБАВИТЬ [название]\n"
-        "• !ТРЕК УДАЛИТЬ [название]\n"
-        "• !ТРЕК ПАУЗА [название]\n"
-        "🎫 Тарифы:\n"
+        "• /searchai [запрос] — поиск + ответ AI (Pro/Business)\n\n"
+        "🎫 <b>Тарифы:</b>\n"
         "🆓 Lite — команды и эхо, без AI\n"
         "⚡ Pro — AI через ключ владельца или свой (BYOK)\n"
         "💎 Business — максимум ролей и функций"
@@ -1052,9 +1049,11 @@ async def cmd_system(message: types.Message):
 
 # ============ ТРЕКИ (ИНТЕРАКТИВНОЕ МЕНЮ) ============
 
+# ============ ТРЕКИ (ИНТЕРАКТИВНОЕ МЕНЮ С INLINE-КНОПКАМИ) ============
+
 @router.callback_query(F.data == "sys:tracks:menu")
 async def sys_tracks_menu(callback: types.CallbackQuery):
-    """Показывает меню управления треками"""
+    """Показывает список треков с кнопками действий у каждого"""
     async with async_session() as session:
         result = await session.execute(
             select(UserState).where(UserState.user_id == callback.from_user.id)
@@ -1067,30 +1066,99 @@ async def sys_tracks_menu(callback: types.CallbackQuery):
     
     text = (
         "🎯 <b>Управление треками</b>\n\n"
-        f"🟢 Активных: {len(active)}\n"
-        f"⏸ На паузе: {len(paused)}\n\n"
+        f"🟢 Активных: {len(active)} | ⏸ На паузе: {len(paused)}\n\n"
     )
     
-    if active:
-        text += "<b>Активные:</b>\n" + "\n".join(f"  🟢 {t['name']}" for t in active) + "\n\n"
-    if paused:
-        text += "<b>Пауза:</b>\n" + "\n".join(f"  ⏸ {t['name']}" for t in paused) + "\n\n"
-    
     builder = InlineKeyboardBuilder()
-    builder.button(text="➕ Добавить", callback_data="sys:tracks:add")
-    builder.button(text="🗑 Удалить", callback_data="sys:tracks:delete")
-    builder.button(text="⏸ Пауза", callback_data="sys:tracks:pause")
-    builder.button(text="▶️ Возобновить", callback_data="sys:tracks:resume")
+    
+    # Выводим треки с кнопками действий
+    all_tracks = active + paused
+    if not all_tracks:
+        text += "У тебя пока нет треков.\n"
+    else:
+        text += "<b>Твои треки:</b>\n"
+        for idx, t in enumerate(all_tracks):
+            icon = "🟢" if t.get("status") == "active" else "⏸"
+            text += f"{icon} {t['name']}\n"
+            
+            # Кнопки под каждым треком (в одном ряду)
+            builder.button(text="❌", callback_data=f"sys:track:delete:{idx}")
+            if t.get("status") == "active":
+                builder.button(text="⏸", callback_data=f"sys:track:pause:{idx}")
+            else:
+                builder.button(text="▶️", callback_data=f"sys:track:resume:{idx}")
+        
+        # Настраиваем: 2 кнопки на каждый трек (❌ + ⏸/▶️)
+        # adjust(2) повторяется для каждого трека
+        builder.adjust(*[2 for _ in all_tracks])
+    
+    # Отдельные кнопки внизу
+    builder.button(text="➕ Добавить трек", callback_data="sys:tracks:add")
     builder.button(text="← Назад в меню", callback_data="sys:main")
-    builder.adjust(2, 2, 1)
+    builder.adjust(1, 1)  # Каждая кнопка в отдельном ряду
     
     await callback.message.edit_text(text, reply_markup=builder.as_markup())
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("sys:track:"))
+async def sys_track_action(callback: types.CallbackQuery):
+    """
+    Обрабатывает нажатие ❌, ⏸, ▶️ у конкретного трека.
+    Формат callback_data: sys:track:delete:0, sys:track:pause:1 и т.д.
+    """
+    parts = callback.data.split(":")
+    action = parts[2]  # delete / pause / resume
+    idx = int(parts[3])
+    
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserState).where(UserState.user_id == callback.from_user.id)
+        )
+        user_state = result.scalar_one_or_none()
+        
+        if not user_state:
+            await callback.answer("❌ Ошибка: состояние не найдено", show_alert=True)
+            return
+        
+        tracks = _get_tracks(user_state)
+        
+        if idx >= len(tracks):
+            await callback.answer("❌ Трек не найден (список изменился)", show_alert=True)
+            return
+        
+        track = tracks[idx]
+        name = track["name"]
+        
+        if action == "delete":
+            tracks.pop(idx)
+            msg = f"🗑 Трек «{name}» удалён"
+        
+        elif action == "pause":
+            track["status"] = "paused"
+            msg = f"⏸ Трек «{name}» на паузе"
+        
+        elif action == "resume":
+            track["status"] = "active"
+            msg = f"▶️ Трек «{name}» возобновлён"
+        
+        else:
+            await callback.answer("❌ Неизвестное действие", show_alert=True)
+            return
+        
+        _save_tracks(user_state, tracks)
+        await session.commit()
+    
+    await callback.answer(msg)
+    
+    # Обновляем меню треков
+    callback.data = "sys:tracks:menu"
+    await sys_tracks_menu(callback)
+
+
 @router.callback_query(F.data == "sys:tracks:add")
 async def sys_tracks_add_start(callback: types.CallbackQuery, state: FSMContext):
-    """Начинает диалог добавления трека"""
+    """Начинает диалог добавления трека (только добавление оставляем текстом)"""
     await state.set_state(TrackMenu.waiting_for_name)
     await state.update_data(action="add")
     
@@ -1106,101 +1174,16 @@ async def sys_tracks_add_start(callback: types.CallbackQuery, state: FSMContext)
     await callback.answer()
 
 
-@router.callback_query(F.data == "sys:tracks:delete")
-async def sys_tracks_delete_start(callback: types.CallbackQuery, state: FSMContext):
-    """Начинает диалог удаления трека"""
-    await state.set_state(TrackMenu.waiting_for_name)
-    await state.update_data(action="delete")
-    
-    async with async_session() as session:
-        result = await session.execute(
-            select(UserState).where(UserState.user_id == callback.from_user.id)
-        )
-        user_state = result.scalar_one_or_none()
-    
-    tracks = _get_tracks(user_state) if user_state else []
-    if not tracks:
-        await callback.answer("❌ У тебя нет треков для удаления", show_alert=True)
-        await state.clear()
-        return
-    
-    text = "🗑 <b>Удаление трека</b>\n\nТвои треки:\n"
-    for t in tracks:
-        icon = "🟢" if t.get("status") == "active" else "⏸"
-        text += f"{icon} {t['name']}\n"
-    
-    text += "\nВведи название трека, который хочешь удалить:"
-    
-    await callback.message.answer(text)
-    await callback.answer()
-
-
-@router.callback_query(F.data == "sys:tracks:pause")
-async def sys_tracks_pause_start(callback: types.CallbackQuery, state: FSMContext):
-    """Начинает диалог паузы трека"""
-    await state.set_state(TrackMenu.waiting_for_name)
-    await state.update_data(action="pause")
-    
-    async with async_session() as session:
-        result = await session.execute(
-            select(UserState).where(UserState.user_id == callback.from_user.id)
-        )
-        user_state = result.scalar_one_or_none()
-    
-    tracks = _get_tracks(user_state) if user_state else []
-    active = [t for t in tracks if t.get("status") == "active"]
-    
-    if not active:
-        await callback.answer("❌ Нет активных треков для паузы", show_alert=True)
-        await state.clear()
-        return
-    
-    text = "⏸ <b>Пауза трека</b>\n\nАктивные треки:\n"
-    for t in active:
-        text += f"🟢 {t['name']}\n"
-    
-    text += "\nВведи название трека, который хочешь поставить на паузу:"
-    
-    await callback.message.answer(text)
-    await callback.answer()
-
-
-@router.callback_query(F.data == "sys:tracks:resume")
-async def sys_tracks_resume_start(callback: types.CallbackQuery, state: FSMContext):
-    """Начинает диалог возобновления трека"""
-    await state.set_state(TrackMenu.waiting_for_name)
-    await state.update_data(action="resume")
-    
-    async with async_session() as session:
-        result = await session.execute(
-            select(UserState).where(UserState.user_id == callback.from_user.id)
-        )
-        user_state = result.scalar_one_or_none()
-    
-    tracks = _get_tracks(user_state) if user_state else []
-    paused = [t for t in tracks if t.get("status") == "paused"]
-    
-    if not paused:
-        await callback.answer("❌ Нет треков на паузе", show_alert=True)
-        await state.clear()
-        return
-    
-    text = "▶️ <b>Возобновление трека</b>\n\nТреки на паузе:\n"
-    for t in paused:
-        text += f"⏸ {t['name']}\n"
-    
-    text += "\nВведи название трека, который хочешь возобновить:"
-    
-    await callback.message.answer(text)
-    await callback.answer()
-
-
 @router.message(TrackMenu.waiting_for_name)
 async def sys_tracks_process_name(message: types.Message, state: FSMContext):
-    """Обрабатывает ввод названия трека (добавить/удалить/пауза/возобновить)"""
+    """Обрабатывает ввод названия трека (только для добавления)"""
     data = await state.get_data()
     action = data.get("action")
     name = message.text.strip()
+    
+    if action != "add":
+        await state.clear()
+        return
     
     async with async_session() as session:
         result = await session.execute(
@@ -1219,69 +1202,23 @@ async def sys_tracks_process_name(message: types.Message, state: FSMContext):
         
         tracks = _get_tracks(user_state)
         
-        if action == "add":
-            if any(t["name"].lower() == name.lower() for t in tracks):
-                await message.answer(f"⚠️ Трек «{name}» уже есть.")
-                await state.clear()
-                return
-            
-            tracks.append({"name": name, "status": "active"})
-            _save_tracks(user_state, tracks)
-            await session.commit()
-            
-            await message.answer(
-                f"✅ Трек «<b>{name}</b>» добавлен!\n\n"
-                f"Всего треков: {len(tracks)}"
-            )
+        if any(t["name"].lower() == name.lower() for t in tracks):
+            await message.answer(f"⚠️ Трек «{name}» уже есть.")
+            await state.clear()
+            return
         
-        elif action == "delete":
-            new_tracks = [t for t in tracks if t["name"].lower() != name.lower()]
-            if len(new_tracks) == len(tracks):
-                await message.answer(f"❌ Трек «{name}» не найден.")
-                await state.clear()
-                return
-            
-            _save_tracks(user_state, new_tracks)
-            await session.commit()
-            await message.answer(f"🗑 Трек «<b>{name}</b>» удалён.")
+        tracks.append({"name": name, "status": "active"})
+        _save_tracks(user_state, tracks)
+        await session.commit()
         
-        elif action == "pause":
-            found = False
-            for t in tracks:
-                if t["name"].lower() == name.lower():
-                    t["status"] = "paused"
-                    found = True
-                    break
-            
-            if not found:
-                await message.answer(f"❌ Трек «{name}» не найден.")
-                await state.clear()
-                return
-            
-            _save_tracks(user_state, tracks)
-            await session.commit()
-            await message.answer(f"⏸ Трек «<b>{name}</b>» на паузе.")
-        
-        elif action == "resume":
-            found = False
-            for t in tracks:
-                if t["name"].lower() == name.lower():
-                    t["status"] = "active"
-                    found = True
-                    break
-            
-            if not found:
-                await message.answer(f"❌ Трек «{name}» не найден.")
-                await state.clear()
-                return
-            
-            _save_tracks(user_state, tracks)
-            await session.commit()
-            await message.answer(f"▶️ Трек «<b>{name}</b>» возобновлён.")
+        await message.answer(
+            f"✅ Трек «<b>{name}</b>» добавлен!\n\n"
+            f"Всего треков: {len(tracks)}"
+        )
     
     await state.clear()
     
-    # Предлагаем вернуться в меню треков
+    # Предлагаем вернуться
     builder = InlineKeyboardBuilder()
     builder.button(text="🎯 К трекам", callback_data="sys:tracks:menu")
     builder.button(text="🎛 Главное меню", callback_data="sys:main")
@@ -1289,6 +1226,28 @@ async def sys_tracks_process_name(message: types.Message, state: FSMContext):
     
     await message.answer("Что дальше?", reply_markup=builder.as_markup())
 
+
+# ============ ЗАГЛУШКИ ДЛЯ ОСТАЛЬНЫХ РАЗДЕЛОВ /system ============
+
+@router.callback_query(F.data == "sys:focus:menu")
+async def sys_focus_stub(callback: types.CallbackQuery):
+    await callback.answer("⚡ Фокус — в разработке", show_alert=True)
+
+
+@router.callback_query(F.data == "sys:progress")
+async def sys_progress_stub(callback: types.CallbackQuery):
+    await callback.answer("📊 Прогресс — в разработке", show_alert=True)
+
+
+@router.callback_query(F.data == "sys:ai_mode")
+async def sys_ai_mode_stub(callback: types.CallbackQuery):
+    await callback.answer("🧠 AI-режим — в разработке", show_alert=True)
+
+
+@router.callback_query(F.data == "sys:profile")
+async def sys_profile_stub(callback: types.CallbackQuery):
+    await callback.answer("📋 Мои данные — в разработке", show_alert=True)
+    
 
 # ============ НАЗАД В ГЛАВНОЕ МЕНЮ ============
 
