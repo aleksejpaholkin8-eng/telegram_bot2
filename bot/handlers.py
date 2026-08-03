@@ -18,6 +18,7 @@ from services.tariff_service import check_token_limit, check_feature_access
 from services.role_router import select_roles
 from services.prompt_builder import build_system_prompt, count_tokens
 from services.encryption import encrypt_key
+from services.search_service import web_search
 
 router = Router()
 
@@ -107,6 +108,7 @@ async def cmd_help(message: types.Message):
         "• /roles — показать роли твоего тарифа\n"
         "• /commands — показать команды\n"
         "• /setkey — ввести свой API-ключ (BYOK)\n\n"
+        "• /search [запрос] — поиск в интернете (Pro/Business)\n"
         "🎫 Тарифы:\n"
         "🆓 Lite — команды и эхо, без AI\n"
         "⚡ Pro — AI через ключ владельца или свой (BYOK)\n"
@@ -243,6 +245,72 @@ async def cmd_commands(message: types.Message):
                 text += f"{icon} <b>{cmd.name}</b> — {cmd.description}\n"
             await message.answer(text)
             
+
+@router.message(Command(commands="search"))
+async def cmd_search(message: types.Message):
+    """
+    Поиск в интернете. Доступен только в Pro/Business.
+    Формат: /search запрос
+    """
+    user = await get_or_create_user(message)
+    
+    # Проверяем доступность функции в тарифе
+    has_access, _ = await check_feature_access(user.tariff, "web_search")
+    if not has_access:
+        await message.answer(
+            "🔒 <b>Веб-поиск недоступен</b>\n\n"
+            f"В тарифе {user.tariff.upper()} эта функция отключена.\n"
+            "Обнови до Pro или Business: /admin (если ты владелец)"
+        )
+        return
+    
+    # Парсим запрос
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer(
+            "🔍 <b>Поиск в интернете</b>\n\n"
+            "Формат: <code>/search запрос</code>\n"
+            "Пример: <code>/search python asyncio tutorial</code>\n\n"
+            "💡 Результаты будут включены в ответ AI."
+        )
+        return
+    
+    query = args[1]
+    wait_msg = await message.answer(f"🔍 Ищу: <i>{query}</i>...")
+    
+    results, error = await web_search(query, max_results=5)
+    
+    if error:
+        await wait_msg.edit_text(error)
+        return
+    
+    # Формируем красивый ответ
+    text = f"🔍 <b>Результаты поиска:</b> <i>{query}</i>\n\n"
+    for i, r in enumerate(results, 1):
+        text += f"{i}. <b>{r['title']}</b>\n"
+        text += f"   {r['snippet'][:150]}...\n"
+        text += f"   <a href='{r['url']}'>Ссылка</a>\n\n"
+    
+    # Разбиваем, если длинно
+    if len(text) > 4000:
+        parts = []
+        current = f"🔍 <b>Результаты поиска:</b> <i>{query}</i>\n\n"
+        for i, r in enumerate(results, 1):
+            block = f"{i}. <b>{r['title']}</b>\n   {r['snippet'][:150]}...\n   <a href='{r['url']}'>Ссылка</a>\n\n"
+            if len(current) + len(block) > 4000:
+                parts.append(current)
+                current = block
+            else:
+                current += block
+        if current:
+            parts.append(current)
+        
+        await wait_msg.delete()
+        for part in parts:
+            await message.answer(part, disable_web_page_preview=True)
+    else:
+        await wait_msg.edit_text(text, disable_web_page_preview=True)
+
 
 @router.message(Command(commands="settariff"))
 async def cmd_settariff(message: types.Message):
