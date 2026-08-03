@@ -1729,7 +1729,7 @@ async def smart_handler(message: types.Message):
         pass
 
     # --- ОТПРАВЛЯЕМ В AI ---
-           answer, success = await ask_llm(
+        answer, success = await ask_llm(
         prompt=message.text,
         user_id=message.from_user.id,
         model=default_model,
