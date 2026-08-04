@@ -1,7 +1,3 @@
-# ============================================
-# ОБЩИЕ КОМАНДЫ И FSM-ДИАЛОГИ
-# ============================================
-
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -16,9 +12,6 @@ from services.encryption import encrypt_key
 from config.settings import settings
 
 router = Router()
-
-
-# ============ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ============
 
 async def get_or_create_user(message: types.Message):
     """
@@ -44,16 +37,12 @@ async def get_or_create_user(message: types.Message):
 
         return user
 
-
-# ============ /START ============
-
 @router.message(Command(commands="start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
 
     user = await get_or_create_user(message)
 
-    # Владелец бота — показываем админ-кнопку
     if message.from_user.id == settings.owner_id:
         admin_kb = ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text="🔧 Админ-меню")]],
@@ -79,7 +68,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
         )
         return
 
-    # Обычный пользователь
     user_kb = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="🎛 Меню")]],
         resize_keyboard=True
@@ -99,9 +87,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
         f"💡 Просто напиши сообщение — и я отвечу через AI (если тариф позволяет).",
         reply_markup=user_kb
     )
-
-
-# ============ /HELP ============
 
 @router.message(Command(commands="help"))
 async def cmd_help(message: types.Message):
@@ -124,9 +109,6 @@ async def cmd_help(message: types.Message):
         "💎 Business — максимум ролей и функций"
     )
 
-
-# ============ /REGISTER (FSM) ============
-
 @router.message(Command(commands="register"))
 async def cmd_register(message: types.Message, state: FSMContext):
     await state.set_state(UserRegistration.waiting_for_name)
@@ -136,7 +118,6 @@ async def cmd_register(message: types.Message, state: FSMContext):
         "Как тебя зовут?"
     )
 
-
 @router.message(UserRegistration.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
@@ -145,7 +126,6 @@ async def process_name(message: types.Message, state: FSMContext):
         f"Приятно познакомиться, <b>{message.text}</b>!\n\n"
         f"Шаг 2 из 3\nКакая твоя главная цель?"
     )
-
 
 @router.message(UserRegistration.waiting_for_goal)
 async def process_goal(message: types.Message, state: FSMContext):
@@ -158,7 +138,6 @@ async def process_goal(message: types.Message, state: FSMContext):
         f"🎯 Цель: {data['goal']}\n\n"
         f"Шаг 3 из 3. Всё верно? Напиши <b>да</b> или <b>нет</b>."
     )
-
 
 @router.message(UserRegistration.waiting_for_confirm, F.text.lower() == "да")
 async def process_confirm_yes(message: types.Message, state: FSMContext):
@@ -189,19 +168,14 @@ async def process_confirm_yes(message: types.Message, state: FSMContext):
         f"💾 Данные сохранены в базу данных."
     )
 
-
 @router.message(UserRegistration.waiting_for_confirm, F.text.lower() == "нет")
 async def process_confirm_no(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("❌ Регистрация отменена. Напиши /register, чтобы начать заново.")
 
-
 @router.message(UserRegistration.waiting_for_confirm)
 async def process_confirm_invalid(message: types.Message):
     await message.answer("Не понял. Напиши <b>да</b> или <b>нет</b>.")
-
-
-# ============ /SETKEY (BYOK) ============
 
 @router.message(Command(commands="setkey"))
 async def cmd_setkey(message: types.Message, state: FSMContext):
@@ -215,7 +189,6 @@ async def cmd_setkey(message: types.Message, state: FSMContext):
         "⚠️ Ключ будет сохранён в зашифрованном виде.\n"
         "Для отмены напиши /start."
     )
-
 
 @router.message(ByokInput.waiting_for_key)
 async def process_byok_key(message: types.Message, state: FSMContext):
