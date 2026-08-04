@@ -1,9 +1,3 @@
-# ============================================
-# СБОРКА ВСЕХ РОУТЕРОВ В ОДИН
-# ============================================
-# Этот файл собирает роутеры из всех модулей
-# и экспортирует один общий router для main.py
-
 from aiogram import Router
 
 from bot.handlers.common import router as common_router
@@ -14,8 +8,6 @@ from bot.handlers.ai import router as ai_router
 
 router = Router()
 
-# Подключаем в порядке приоритета:
-# сначала специфичные команды, потом общие (smart_handler в ai.py — последний)
 router.include_router(common_router)
 router.include_router(admin_router)
 router.include_router(tracks_router)
