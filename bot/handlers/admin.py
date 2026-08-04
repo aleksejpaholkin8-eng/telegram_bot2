@@ -1,12 +1,3 @@
-# ============================================
-# АДМИН-ПАНЕЛЬ И УПРАВЛЕНИЕ ПРОМПТОМ
-# ============================================
-# Здесь:
-# • /admin — админ-панель с inline-кнопками
-# • /settariff — смена тарифа
-# • /upload_prompt — загрузка .md файла с FSM-защитой
-# • Настройка tariff_features и RoleTariffAccess
-
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -21,13 +12,8 @@ from config.settings import settings
 
 router = Router()
 
-
-# ============ /ADMIN ============
-
-@router.message(Command(commands="admin"))
 async def cmd_admin(message: types.Message):
     await _send_admin_menu(message, message.from_user.id)
-
 
 async def _send_admin_menu(target, user_id: int):
     """Показывает главное меню админ-панели"""
@@ -50,9 +36,6 @@ async def _send_admin_menu(target, user_id: int):
         await target.message.edit_text(text, reply_markup=builder.as_markup())
     else:
         await target.answer(text, reply_markup=builder.as_markup())
-
-
-# ============ /SETTARIFF ============
 
 @router.message(Command(commands="settariff"))
 async def cmd_settariff(message: types.Message):
@@ -97,9 +80,6 @@ async def cmd_settariff(message: types.Message):
         f"Перезапусти бота: /start"
     )
 
-
-# ============ /UPLOAD_PROMPT ============
-
 @router.message(Command(commands="upload_prompt"))
 async def cmd_upload_prompt(message: types.Message, state: FSMContext):
     if message.from_user.id != settings.owner_id:
@@ -117,7 +97,6 @@ async def cmd_upload_prompt(message: types.Message, state: FSMContext):
         "• Для отмены напиши /start\n\n"
         "Жду файл или текст..."
     )
-
 
 @router.message(F.document)
 async def handle_document_upload(message: types.Message, state: FSMContext):
@@ -147,7 +126,6 @@ async def handle_document_upload(message: types.Message, state: FSMContext):
     await wait_msg.edit_text("🔍 Парсю файл...")
     await _process_prompt_text(message, text, wait_msg, state)
 
-
 @router.message(F.text, ~F.text.startswith('/'), UploadPrompt.waiting_for_file)
 async def handle_text_upload(message: types.Message, state: FSMContext):
     if message.from_user.id != settings.owner_id:
@@ -159,7 +137,6 @@ async def handle_text_upload(message: types.Message, state: FSMContext):
 
     wait_msg = await message.answer("🔍 Парсю текст...")
     await _process_prompt_text(message, message.text, wait_msg, state)
-
 
 async def _process_prompt_text(message: types.Message, text: str, wait_msg: types.Message, state: FSMContext):
     from parsers.prompt_parser import parse_prompt_text
@@ -239,7 +216,6 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
 
         await session.commit()
 
-        # Создаём дефолтные доступы для ролей
         for role in parsed.roles:
             result = await session.execute(select(Role).where(Role.name == role.name))
             db_role = result.scalar_one()
@@ -281,9 +257,6 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
 
     await wait_msg.edit_text(report)
 
-
-# ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ РЕНДЕРИНГА ============
-
 async def _render_tariff_features(target_message, tariff: str):
     """Рендерит список фич тарифа"""
     async with async_session() as session:
@@ -323,7 +296,6 @@ async def _render_tariff_features(target_message, tariff: str):
             pass
         else:
             raise
-
 
 async def _render_roles_list(target_message, tariff: str, page: int = 0):
     """Рендерит список ролей для тарифа"""
@@ -381,16 +353,12 @@ async def _render_roles_list(target_message, tariff: str, page: int = 0):
         else:
             raise
 
-
-# ============ CALLBACK ОБРАБОТЧИКИ АДМИНКИ ============
-
 @router.callback_query(F.data.startswith("admin:tariff:"))
 async def admin_show_tariff(callback: types.CallbackQuery):
     """Показывает фичи конкретного тарифа"""
     tariff = callback.data.split(":")[2]
     await _render_tariff_features(callback.message, tariff)
     await callback.answer()
-
 
 @router.callback_query(F.data.startswith("admin:toggle:"))
 async def admin_toggle_feature(callback: types.CallbackQuery):
@@ -415,9 +383,7 @@ async def admin_toggle_feature(callback: types.CallbackQuery):
     status = "включена" if new_access else "выключена"
     await callback.answer(f"✅ {feature} {status} для {tariff}")
 
-    # Обновляем экран
     await _render_tariff_features(callback.message, tariff)
-
 
 @router.callback_query(F.data.startswith("admin:limit:"))
 async def admin_edit_limit_start(callback: types.CallbackQuery, state: FSMContext):
@@ -438,7 +404,6 @@ async def admin_edit_limit_start(callback: types.CallbackQuery, state: FSMContex
         f"Для отмены напиши /start"
     )
     await callback.answer()
-
 
 @router.message(AdminEditLimit.waiting_for_value)
 async def admin_edit_limit_finish(message: types.Message, state: FSMContext):
@@ -474,12 +439,10 @@ async def admin_edit_limit_finish(message: types.Message, state: FSMContext):
         f"Проверь: /admin"
     )
 
-
 @router.callback_query(F.data == "admin:menu")
 async def admin_back_to_menu(callback: types.CallbackQuery):
     await _send_admin_menu(callback, callback.from_user.id)
     await callback.answer()
-
 
 @router.callback_query(F.data == "admin:section:features")
 async def admin_section_features(callback: types.CallbackQuery):
@@ -495,7 +458,6 @@ async def admin_section_features(callback: types.CallbackQuery):
         reply_markup=builder.as_markup()
     )
     await callback.answer()
-
 
 @router.callback_query(F.data == "admin:section:roles")
 async def admin_section_roles(callback: types.CallbackQuery):
@@ -514,7 +476,6 @@ async def admin_section_roles(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-
 @router.callback_query(F.data == "admin:commands")
 async def admin_commands_list(callback: types.CallbackQuery):
     text = (
@@ -531,7 +492,6 @@ async def admin_commands_list(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=builder.as_markup())
     await callback.answer()
 
-
 @router.callback_query(F.data.startswith("admin:roles:tariff:"))
 async def admin_roles_list(callback: types.CallbackQuery):
     """Показывает список ролей для тарифа (с пагинацией)"""
@@ -540,7 +500,6 @@ async def admin_roles_list(callback: types.CallbackQuery):
     page = int(parts[5]) if len(parts) > 5 else 0
     await _render_roles_list(callback.message, tariff, page)
     await callback.answer()
-
 
 @router.callback_query(F.data.startswith("admin:role:toggle:"))
 async def admin_role_toggle(callback: types.CallbackQuery):
@@ -569,5 +528,4 @@ async def admin_role_toggle(callback: types.CallbackQuery):
     status_text = "включена" if new_status else "выключена"
     await callback.answer(f"Роль {status_text} для {tariff}")
 
-    # Обновляем список
     await _render_roles_list(callback.message, tariff, 0)
