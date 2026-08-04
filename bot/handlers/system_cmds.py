@@ -1,15 +1,3 @@
-# ============================================
-# ТЕКСТОВЫЕ КОМАНДЫ СИСТЕМЫ (!-КОМАНДЫ)
-# ============================================
-# Здесь:
-# • !ТРЕКИ — список треков
-# • !ТРЕК ДОБАВИТЬ / УДАЛИТЬ / ПАУЗА — управление треками
-# • !ЖМИ / !РАЗВЕРНИ — режим ответа
-# • !ФОКУС [тема] — установка фокуса
-# • !СБРОС — сброс настроек
-# • !ПРОГРЕСС — дашборд (заглушка, доделаем позже)
-# • !ВРЕМЯ [трек] [часы] — счётчик часов (заглушка, доделаем позже)
-
 from aiogram import Router, types, F
 from sqlalchemy import select
 
@@ -18,9 +6,6 @@ from db.models import UserState
 from bot.handlers.tracks import _get_tracks, _save_tracks
 
 router = Router()
-
-
-# ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
 
 async def _set_response_mode(message: types.Message, mode: str):
     """Устанавливает режим ответа (short/long) в json_passport"""
@@ -50,7 +35,6 @@ async def _set_response_mode(message: types.Message, mode: str):
         f"Сбросить: <code>!СБРОС</code>"
     )
 
-
 async def _set_focus(message: types.Message, topic: str):
     """Устанавливает фокус-тему в json_passport"""
     async with async_session() as session:
@@ -78,7 +62,6 @@ async def _set_focus(message: types.Message, topic: str):
         f"Сбросить: <code>!СБРОС</code>"
     )
 
-
 async def _reset_settings(message: types.Message):
     """Сбрасывает response_mode и focus"""
     async with async_session() as session:
@@ -95,16 +78,12 @@ async def _reset_settings(message: types.Message):
 
     await message.answer("🔄 <b>Настройки сброшены.</b>\n\nСтандартный режим, фокус снят.")
 
-
-# ============ ГЛАВНЫЙ ОБРАБОТЧИК !-КОМАНД ============
-
 @router.message(F.text.startswith("!"))
 async def system_commands(message: types.Message):
     text = message.text.strip()
     parts = text.split(maxsplit=2)
     cmd = parts[0].upper()
 
-    # Получаем или создаём user_state (один раз)
     async with async_session() as session:
         result = await session.execute(
             select(UserState).where(UserState.user_id == message.from_user.id)
@@ -121,7 +100,6 @@ async def system_commands(message: types.Message):
             session.add(user_state)
             await session.commit()
 
-    # ==================== !ТРЕКИ ====================
     if cmd == "!ТРЕКИ":
         tracks = _get_tracks(user_state)
         if not tracks:
@@ -152,7 +130,6 @@ async def system_commands(message: types.Message):
         await message.answer(text)
         return
 
-    # ==================== !ТРЕК ДОБАВИТЬ ====================
     if cmd == "!ТРЕК" and len(parts) >= 3 and parts[1].upper() == "ДОБАВИТЬ":
         name = parts[2].strip()
         tracks = _get_tracks(user_state)
@@ -174,7 +151,6 @@ async def system_commands(message: types.Message):
         )
         return
 
-    # ==================== !ТРЕК УДАЛИТЬ ====================
     if cmd == "!ТРЕК" and len(parts) >= 3 and parts[1].upper() == "УДАЛИТЬ":
         name = parts[2].strip()
         tracks = _get_tracks(user_state)
@@ -192,7 +168,6 @@ async def system_commands(message: types.Message):
         await message.answer(f"🗑 Трек «<b>{name}</b>» удалён.")
         return
 
-    # ==================== !ТРЕК ПАУЗА ====================
     if cmd == "!ТРЕК" and len(parts) >= 3 and parts[1].upper() == "ПАУЗА":
         name = parts[2].strip()
         tracks = _get_tracks(user_state)
@@ -216,7 +191,6 @@ async def system_commands(message: types.Message):
         await message.answer(f"⏸ Трек «<b>{name}</b>» поставлен на паузу.")
         return
 
-    # ==================== !ПРОГРЕСС (заглушка) ====================
     if cmd == "!ПРОГРЕСС":
         tracks = _get_tracks(user_state)
         active = [t for t in tracks if t.get("status") == "active"]
@@ -241,7 +215,6 @@ async def system_commands(message: types.Message):
         await message.answer(text)
         return
 
-    # ==================== !ВРЕМЯ (заглушка) ====================
     if cmd == "!ВРЕМЯ":
         await message.answer(
             "⏱ <b>!ВРЕМЯ</b>\n\n"
@@ -251,7 +224,6 @@ async def system_commands(message: types.Message):
         )
         return
 
-    # ==================== РЕЖИМЫ ОТВЕТА ====================
     if cmd == "!ЖМИ":
         await _set_response_mode(message, "short")
         return
@@ -259,7 +231,6 @@ async def system_commands(message: types.Message):
         await _set_response_mode(message, "long")
         return
 
-    # ==================== !ФОКУС ====================
     if cmd == "!ФОКУС":
         topic = parts[1] if len(parts) > 1 else ""
         if not topic:
@@ -273,12 +244,10 @@ async def system_commands(message: types.Message):
         await _set_focus(message, topic)
         return
 
-    # ==================== !СБРОС ====================
     if cmd == "!СБРОС":
         await _reset_settings(message)
         return
 
-    # ==================== НЕИЗВЕСТНАЯ КОМАНДА ====================
     await message.answer(
         f"❓ Неизвестная команда: <code>{message.text[:30]}</code>\n\n"
         f"📋 <b>Доступные !-команды:</b>\n"
