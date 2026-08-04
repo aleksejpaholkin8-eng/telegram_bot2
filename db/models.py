@@ -1,12 +1,7 @@
-# ============================================
-# МОДЕЛИ БАЗЫ ДАННЫХ (ТАБЛИЦЫ)
-# ============================================
-
 from sqlalchemy import Column, Integer, String, Boolean, Text, DateTime, BigInteger, JSON
 from sqlalchemy.sql import func
 
 from db.database import Base
-
 
 class User(Base):
     """Таблица пользователей Telegram"""
@@ -20,41 +15,37 @@ class User(Base):
     tariff = Column(String(20), default="lite")  # lite / pro / business
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-
 class Role(Base):
     """Таблица ролей (60 ролей из Промпта 1)"""
     __tablename__ = "roles"
     
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(200), nullable=False)          # Название роли
-    group_name = Column(String(100), nullable=True)     # Группа (например, "Языки", "Код")
-    prompt_text = Column(Text, nullable=False)          # Текст промпта роли
-    keywords = Column(Text, nullable=True)              # Ключевые слова для роутинга (через запятую)
-    is_active = Column(Boolean, default=True)           # Включена ли роль
-    tier_access = Column(String(20), default="lite")    # Минимальный тариф: lite/pro/business
-
+    name = Column(String(200), nullable=False)
+    group_name = Column(String(100), nullable=True)
+    prompt_text = Column(Text, nullable=False)
+    keywords = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+    tier_access = Column(String(20), default="lite")
 
 class Rule(Base):
     """Таблица правил (Конституция)"""
     __tablename__ = "rules"
     
     id = Column(Integer, primary_key=True, index=True)
-    number = Column(Integer, nullable=False)            # Номер статьи
-    text = Column(Text, nullable=False)                 # Текст правила
+    number = Column(Integer, nullable=False)
+    text = Column(Text, nullable=False)
     is_active = Column(Boolean, default=True)
-
 
 class Command(Base):
     """Таблица команд системы (!ТРЕКИ, !ФОКУС...)"""
     __tablename__ = "commands"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    cluster = Column(String(50), nullable=False)        # Кластер (CORE, SYSTEM, AGENT...)
-    name = Column(String(100), nullable=False)          # Имя команды (!ТРЕКИ)
-    description = Column(Text, nullable=True)           # Описание
-    handler_name = Column(String(100), nullable=True)   # Имя обработчика в коде
-    tier_access = Column(String(20), default="lite")    # Доступность по тарифу
 
+    id = Column(Integer, primary_key=True, index=True)
+    cluster = Column(String(50), nullable=False)
+    name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    handler_name = Column(String(100), nullable=True)
+    tier_access = Column(String(20), default="lite")
 
 class UserState(Base):
     """Состояние пользователя (треки, паспорт, счётчики)"""
@@ -62,14 +53,13 @@ class UserState(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(BigInteger, nullable=False, index=True)
-    license_mode = Column(String(20), default="lite")   # lite / pro / business
-    api_source = Column(String(20), default="owner")    # owner / byok
-    json_passport = Column(JSON, default=dict)          # JSON-паспорт пользователя
-    tracks = Column(JSON, default=list)                 # Список треков
-    counters = Column(JSON, default=dict)               # Счётчики (токены, запросы)
+    license_mode = Column(String(20), default="lite")
+    api_source = Column(String(20), default="owner")
+    json_passport = Column(JSON, default=dict)
+    tracks = Column(JSON, default=list)
+    counters = Column(JSON, default=dict)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-
 
 class UserApiKey(Base):
     """API-ключи пользователей (BYOK)"""
@@ -77,20 +67,19 @@ class UserApiKey(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(BigInteger, nullable=False, index=True)
-    provider = Column(String(50), nullable=False)       # groq / deepseek / openai...
-    key_encrypted = Column(Text, nullable=False)        # Зашифрованный ключ
+    provider = Column(String(50), nullable=False)
+    key_encrypted = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-
 
 class TariffFeature(Base):
     """Тарифная матрица: что доступно в каждом тарифе"""
     __tablename__ = "tariff_features"
     
     id = Column(Integer, primary_key=True, index=True)
-    tariff = Column(String(20), nullable=False)         # lite / pro / business
-    feature = Column(String(100), nullable=False)       # Название функции
-    access = Column(Boolean, default=False)             # Доступна ли функция
-    limit_value = Column(Integer, nullable=True)        # Лимит (например, 5000 токенов)
+    tariff = Column(String(20), nullable=False)
+    feature = Column(String(100), nullable=False)
+    access = Column(Boolean, default=False)
+    limit_value = Column(Integer, nullable=True)
 
 class RoleTariffAccess(Base):
     """Какие роли доступны в каком тарифе (ручное управление админом)"""
