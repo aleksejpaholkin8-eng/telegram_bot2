@@ -1,13 +1,3 @@
-# ============================================
-# AI, ПОИСК И РОЛИ
-# ============================================
-# Здесь:
-# • /roles — список ролей с пагинацией
-# • /commands — список команд с пагинацией
-# • /search — веб-поиск
-# • /searchai — поиск + AI-анализ
-# • smart_handler — главный обработчик сообщений (AI-ответ)
-
 from aiogram import Router, types, F
 from aiogram.filters import Command, StateFilter
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -23,9 +13,6 @@ from services.prompt_builder import build_system_prompt, count_tokens
 from services.search_service import web_search
 
 router = Router()
-
-
-# ============ /ROLES ============
 
 @router.message(Command(commands="roles"))
 async def cmd_roles(message: types.Message):
@@ -50,7 +37,7 @@ async def cmd_roles(message: types.Message):
             )
             roles = result.scalars().all()
         else:
-            # Fallback на старую логику
+            
             if user.tariff == "lite":
                 allowed = ["lite"]
             elif user.tariff == "pro":
@@ -66,7 +53,6 @@ async def cmd_roles(message: types.Message):
             )
             roles = result.scalars().all()
 
-        # Пагинация: разбиваем на чанки по 15 ролей
         chunk_size = 15
         if len(roles) == 0:
             await message.answer(
@@ -82,9 +68,6 @@ async def cmd_roles(message: types.Message):
                 text += f"{icon} <b>{role.name}</b>\n"
                 text += f"   🔑 {role.keywords}\n\n"
             await message.answer(text)
-
-
-# ============ /COMMANDS ============
 
 @router.message(Command(commands="commands"))
 async def cmd_commands(message: types.Message):
@@ -119,9 +102,6 @@ async def cmd_commands(message: types.Message):
                 icon = "✅" if cmd.tier_access == "lite" else "🔒"
                 text += f"{icon} <b>{cmd.name}</b> — {cmd.description}\n"
             await message.answer(text)
-
-
-# ============ /SEARCH ============
 
 @router.message(Command(commands="search"))
 async def cmd_search(message: types.Message):
@@ -183,9 +163,6 @@ async def cmd_search(message: types.Message):
             await message.answer(part, disable_web_page_preview=True)
     else:
         await wait_msg.edit_text(text, disable_web_page_preview=True)
-
-
-# ============ /SEARCHAI ============
 
 @router.message(Command(commands="searchai"))
 async def cmd_searchai(message: types.Message):
@@ -262,7 +239,7 @@ async def cmd_searchai(message: types.Message):
     )
 
     if success:
-        # Считаем токены (включая search_context!)
+
         try:
             tokens_used = (
                 count_tokens(query) +
@@ -301,11 +278,6 @@ async def cmd_searchai(message: types.Message):
     else:
         await wait_msg.edit_text(f"❌ <b>Ошибка AI:</b>\n\n{answer}")
 
-
-# ============ SMART HANDLER (ГЛАВНЫЙ ОБРАБОТЧИК) ============
-
-# ← ИСПРАВЛЕНИЕ: StateFilter(None) = срабатывает ТОЛЬКО когда нет FSM-состояния
-# Это предотвращает перехват сообщений во время диалогов (регистрация, треки, BYOK)
 @router.message(StateFilter(None))
 async def smart_handler(message: types.Message):
     """
@@ -315,7 +287,6 @@ async def smart_handler(message: types.Message):
     """
     user = await get_or_create_user(message)
 
-    # --- РЕЖИМ LITE: без AI ---
     if user.tariff == "lite":
         await message.answer(
             f"🤖 <b>Режим LITE</b>\n\n"
@@ -326,7 +297,6 @@ async def smart_handler(message: types.Message):
         )
         return
 
-    # --- РЕЖИМ PRO/BUSINESS: проверяем лимит ---
     has_access, limit_msg = await check_token_limit(message.from_user.id, user.tariff)
     if not has_access:
         await message.answer(
@@ -335,7 +305,6 @@ async def smart_handler(message: types.Message):
         )
         return
 
-    # --- Проверяем наличие ключа ---
     default_model = "groq/llama-3.3-70b-versatile"
     provider = default_model.split("/")[0]
 
@@ -350,7 +319,6 @@ async def smart_handler(message: types.Message):
         )
         return
 
-    # --- ВЫБИРАЕМ РОЛИ И СОБИРАЕМ ПРОМПТ ---
     wait_msg = await message.answer("⏳ Анализирую запрос и выбираю роли...")
 
     _, max_roles = await check_feature_access(user.tariff, "max_roles")
@@ -362,7 +330,6 @@ async def smart_handler(message: types.Message):
     )
     system_prompt = await build_system_prompt(message.from_user.id, selected_roles)
 
-    # --- Проверяем пользовательские настройки (!ЖМИ, !РАЗВЕРНИ, !ФОКУС) ---
     response_mode = "normal"
     focus_topic = ""
     async with async_session() as session:
@@ -374,7 +341,6 @@ async def smart_handler(message: types.Message):
             response_mode = us.json_passport.get("response_mode", "normal")
             focus_topic = us.json_passport.get("focus", "")
 
-    # Модифицируем промпт под режим
     if response_mode == "short":
         system_prompt += (
             "\n\n[РЕЖИМ: КРАТКО] Ответь максимально сжато: 3-5 тезисов, "
@@ -401,7 +367,6 @@ async def smart_handler(message: types.Message):
     except Exception:
         pass
 
-    # --- ОТПРАВЛЯЕМ В AI ---
     answer, success = await ask_llm(
         prompt=message.text,
         user_id=message.from_user.id,
@@ -410,7 +375,6 @@ async def smart_handler(message: types.Message):
         max_tokens=max_tokens
     )
 
-    # --- Показываем ответ и обновляем счётчик токенов ---
     if success:
         try:
             tokens_used = (
@@ -439,7 +403,6 @@ async def smart_handler(message: types.Message):
 
         full_text = f"{source_icon} <b>Ответ AI:</b>\n\n{answer}{roles_info}"
 
-        # Удаляем wait_msg перед отправкой ответа
         try:
             await wait_msg.delete()
         except Exception:
@@ -456,7 +419,7 @@ async def smart_handler(message: types.Message):
         else:
             await message.answer(full_text)
     else:
-        # Удаляем wait_msg и при ошибке
+
         try:
             await wait_msg.delete()
         except Exception:
