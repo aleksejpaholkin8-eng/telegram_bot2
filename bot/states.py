@@ -1,9 +1,4 @@
-# ============================================
-# СОСТОЯНИЯ FSM
-# ============================================
-
 from aiogram.fsm.state import State, StatesGroup
-
 
 class UserRegistration(StatesGroup):
     """Диалог регистрации"""
@@ -11,24 +6,19 @@ class UserRegistration(StatesGroup):
     waiting_for_goal = State()
     waiting_for_confirm = State()
 
-
 class ByokInput(StatesGroup):
     """Ввод своего API-ключа"""
     waiting_for_key = State()
-
 
 class UploadPrompt(StatesGroup):
     """Диалог загрузки промпта"""
     waiting_for_file = State()
 
-
 class AdminEditLimit(StatesGroup):
     """Изменение лимита в админ-панели"""
     waiting_for_value = State()
 
-
-# ============ НОВОЕ: Интерактивное меню треков ============
 class TrackMenu(StatesGroup):
     """Диалог управления треками через кнопки"""
-    waiting_for_name = State()      # Ждём название трека (добавить/удалить/пауза)
-    action = State()                 # Какое действие выполняем (add/delete/pause)
+    waiting_for_name = State()
+    action = State()
