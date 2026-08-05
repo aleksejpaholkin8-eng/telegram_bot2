@@ -13,6 +13,9 @@ from bot.handlers.admin import _send_admin_menu
 
 router = Router()
 
+
+# ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ТРЕКОВ ============
+
 def _get_tracks(user_state: UserState) -> list:
     """Превращает tracks в нормализованный список словарей"""
     tracks = user_state.tracks or []
@@ -24,11 +27,15 @@ def _get_tracks(user_state: UserState) -> list:
             normalized.append(t)
     return normalized
 
+
 def _save_tracks(user_state: UserState, tracks: list):
     """Сохраняет треки обратно в объект состояния (force dirty для JSON)"""
     import copy
     user_state.tracks = copy.deepcopy(tracks)
     flag_modified(user_state, "tracks")
+
+
+# ============ /SYSTEM — ГЛАВНОЕ МЕНЮ ============
 
 @router.message(Command(commands=["system", "menu"]))
 async def cmd_system(message: types.Message):
@@ -47,6 +54,9 @@ async def cmd_system(message: types.Message):
         "<code>!ТРЕКИ</code>, <code>!ФОКУС</code> и т.д.",
         reply_markup=builder.as_markup()
     )
+
+
+# ============ ТРЕКИ (ИНТЕРАКТИВНОЕ МЕНЮ) ============
 
 @router.callback_query(F.data == "sys:tracks:menu")
 async def sys_tracks_menu(callback: types.CallbackQuery):
@@ -70,7 +80,7 @@ async def sys_tracks_menu(callback: types.CallbackQuery):
     )
 
     keyboard = []
-    all_tracks = active + paused
+    all_tracks = active + paused  # ← Этот порядок используем и в меню, и в обработчике!
 
     if not all_tracks:
         text += "У тебя пока нет треков.\n"
@@ -79,6 +89,7 @@ async def sys_tracks_menu(callback: types.CallbackQuery):
             icon = "🟢" if t.get("status") == "active" else "⏸"
             text += f"{icon} <b>{t['name']}</b>\n"
 
+            # Кнопки с подписями треков для ясности
             action_row = []
             short_name = t['name'][:15]
 
@@ -113,6 +124,7 @@ async def sys_tracks_menu(callback: types.CallbackQuery):
             raise
     await callback.answer()
 
+
 @router.callback_query(F.data.startswith("sys:track:"))
 async def sys_track_action(callback: types.CallbackQuery):
     """
@@ -138,6 +150,7 @@ async def sys_track_action(callback: types.CallbackQuery):
 
         tracks = _get_tracks(user_state)
 
+        # ← ИСПРАВЛЕНИЕ: восстанавливаем порядок КАК В МЕНЮ (active + paused)
         active = [t for t in tracks if t.get("status") == "active"]
         paused = [t for t in tracks if t.get("status") == "paused"]
         all_tracks = active + paused
@@ -146,7 +159,7 @@ async def sys_track_action(callback: types.CallbackQuery):
             await callback.answer("❌ Трек не найден (список изменился)", show_alert=True)
             return
 
-        track = all_tracks[idx]
+        track = all_tracks[idx]  # ← Берём из all_tracks, а не из tracks!
         name = track["name"]
 
         if action == "delete":
@@ -154,7 +167,7 @@ async def sys_track_action(callback: types.CallbackQuery):
             msg = f"🗑 Трек «{name}» удалён"
 
         elif action == "pause":
-
+            # Находим в оригинальном списке и меняем статус
             for t in tracks:
                 if t["name"] == name:
                     t["status"] = "paused"
@@ -177,7 +190,9 @@ async def sys_track_action(callback: types.CallbackQuery):
 
     await callback.answer(msg)
 
+    # Обновляем меню треков
     await sys_tracks_menu(callback)
+
 
 @router.callback_query(F.data == "sys:tracks:add")
 async def sys_tracks_add_start(callback: types.CallbackQuery, state: FSMContext):
@@ -195,6 +210,7 @@ async def sys_tracks_add_start(callback: types.CallbackQuery, state: FSMContext)
         "Для отмены напиши /start"
     )
     await callback.answer()
+
 
 @router.message(TrackMenu.waiting_for_name)
 async def sys_tracks_process_name(message: types.Message, state: FSMContext):
@@ -246,30 +262,41 @@ async def sys_tracks_process_name(message: types.Message, state: FSMContext):
 
     await message.answer("Что дальше?", reply_markup=builder.as_markup())
 
+
+# ============ ЗАГЛУШКИ ДЛЯ ОСТАЛЬНЫХ РАЗДЕЛОВ /system ============
+
 @router.callback_query(F.data == "sys:focus:menu")
 async def sys_focus_stub(callback: types.CallbackQuery):
     await callback.answer("⚡ Фокус — в разработке", show_alert=True)
+
 
 @router.callback_query(F.data == "sys:progress")
 async def sys_progress_stub(callback: types.CallbackQuery):
     await callback.answer("📊 Прогресс — в разработке", show_alert=True)
 
+
 @router.callback_query(F.data == "sys:ai_mode")
 async def sys_ai_mode_stub(callback: types.CallbackQuery):
     await callback.answer("🧠 AI-режим — в разработке", show_alert=True)
 
+
 @router.callback_query(F.data == "sys:profile")
 async def sys_profile_stub(callback: types.CallbackQuery):
     await callback.answer("📋 Мои данные — в разработке", show_alert=True)
+
 
 @router.callback_query(F.data == "sys:main")
 async def sys_back_to_main(callback: types.CallbackQuery):
     await cmd_system(callback.message)
     await callback.answer()
 
+
+# ============ REPLY-КНОПКИ ============
+
 @router.message(F.text == "🎛 Меню")
 async def user_menu_button(message: types.Message):
     await cmd_system(message)
+
 
 @router.message(F.text == "🔧 Админ-меню")
 async def admin_menu_button(message: types.Message):
