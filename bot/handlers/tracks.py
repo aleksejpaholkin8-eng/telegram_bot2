@@ -83,7 +83,19 @@ async def sys_tracks_menu(callback: types.CallbackQuery):
     all_tracks = active + paused  # ← Этот порядок используем и в меню, и в обработчике!
 
     if not all_tracks:
-        text += "У тебя пока нет треков.\n"
+        text += "У тебя пока нет треков.\n\n<b>💡 Быстрое добавление:</b>"
+        templates = [
+            ("🇰🇷 Корея/TOPIK", "Корея/TOPIK"),
+            ("🏗 Строительство/МОК", "Строительство/МОК"),
+            ("💼 Карьера/Вахта", "Карьера/Вахта"),
+            ("📈 Инвестиции", "Инвестиции"),
+            ("🧠 ИИ/Обучение", "ИИ/Обучение"),
+        ]
+        for btn_text, track_name in templates:
+            keyboard.append([InlineKeyboardButton(
+                text=btn_text,
+                callback_data=f"sys:track:add_template:{track_name}"
+            )])
     else:
         for idx, t in enumerate(all_tracks):
             icon = "🟢" if t.get("status") == "active" else "⏸"
@@ -163,8 +175,25 @@ async def sys_track_action(callback: types.CallbackQuery):
         name = track["name"]
 
         if action == "delete":
-            tracks = [t for t in tracks if t["name"] != name]
-            msg = f"🗑 Трек «{name}» удалён"
+            # Показываем подтверждение вместо мгновенного удаления
+            keyboard = [
+                [InlineKeyboardButton(
+                    text=f"🗑 Да, удалить «{name}»",
+                    callback_data=f"sys:track:confirm_delete:{idx}"
+                )],
+                [InlineKeyboardButton(
+                    text="← Отмена",
+                    callback_data="sys:tracks:menu"
+                )]
+            ]
+            await callback.message.edit_text(
+                f"⚠️ <b>Подтверди удаление</b>\n\n"
+                f"Трек: «<b>{name}</b>»\n\n"
+                f"Это действие необратимо.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
+            )
+            await callback.answer()
+            return
 
         elif action == "pause":
             # Находим в оригинальном списке и меняем статус
@@ -193,6 +222,78 @@ async def sys_track_action(callback: types.CallbackQuery):
     # Обновляем меню треков
     await sys_tracks_menu(callback)
 
+
+@router.callback_query(F.data.startswith("sys:track:confirm_delete:"))
+async def sys_track_confirm_delete(callback: types.CallbackQuery):
+    """Подтверждённое удаление трека"""
+    parts = callback.data.split(":")
+    idx = int(parts[3])
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserState).where(UserState.user_id == callback.from_user.id)
+        )
+        user_state = result.scalar_one_or_none()
+
+        if not user_state:
+            await callback.answer("❌ Ошибка: состояние не найдено", show_alert=True)
+            return
+
+        tracks = _get_tracks(user_state)
+
+        # Восстанавливаем тот же порядок active + paused
+        active = [t for t in tracks if t.get("status") == "active"]
+        paused = [t for t in tracks if t.get("status") == "paused"]
+        all_tracks = active + paused
+
+        if idx >= len(all_tracks):
+            await callback.answer("❌ Трек не найден", show_alert=True)
+            return
+
+        track = all_tracks[idx]
+        name = track["name"]
+
+        # Удаляем по имени (надёжнее чем по индексу)
+        tracks = [t for t in tracks if t["name"] != name]
+        _save_tracks(user_state, tracks)
+        await session.commit()
+
+    await callback.answer(f"🗑 Трек «{name}» удалён")
+    await sys_tracks_menu(callback)
+
+
+@router.callback_query(F.data.startswith("sys:track:add_template:"))
+async def sys_track_add_template(callback: types.CallbackQuery):
+    """Добавляет трек из шаблона"""
+    name = callback.data.split(":", 3)[3]
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserState).where(UserState.user_id == callback.from_user.id)
+        )
+        user_state = result.scalar_one_or_none()
+
+        if not user_state:
+            user_state = UserState(
+                user_id=callback.from_user.id,
+                tracks=[],
+                json_passport={},
+                counters={}
+            )
+            session.add(user_state)
+
+        tracks = _get_tracks(user_state)
+
+        if any(t["name"].lower() == name.lower() for t in tracks):
+            await callback.answer(f"⚠️ Трек «{name}» уже есть", show_alert=True)
+        else:
+            tracks.append({"name": name, "status": "active", "hours": 0.0, "goal_hours": 0.0})
+            _save_tracks(user_state, tracks)
+            await session.commit()
+            await callback.answer(f"✅ Трек «{name}» добавлен")
+
+    await sys_tracks_menu(callback)
+    
 
 @router.callback_query(F.data == "sys:tracks:add")
 async def sys_tracks_add_start(callback: types.CallbackQuery, state: FSMContext):
@@ -244,7 +345,7 @@ async def sys_tracks_process_name(message: types.Message, state: FSMContext):
             await state.clear()
             return
 
-        tracks.append({"name": name, "status": "active"})
+        tracks.append({"name": name, "status": "active", "hours": 0.0, "goal_hours": 0.0})
         _save_tracks(user_state, tracks)
         await session.commit()
 
