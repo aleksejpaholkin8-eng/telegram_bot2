@@ -94,7 +94,7 @@ async def sys_tracks_menu(callback: types.CallbackQuery):
         for btn_text, track_name in templates:
             keyboard.append([InlineKeyboardButton(
                 text=btn_text,
-                callback_data=f"sys:track:add_template:{track_name}"
+                callback_data=f"sys:track:add:{track_name}"
             )])
     else:
         for idx, t in enumerate(all_tracks):
@@ -179,7 +179,7 @@ async def sys_track_action(callback: types.CallbackQuery):
             keyboard = [
                 [InlineKeyboardButton(
                     text=f"🗑 Да, удалить «{name}»",
-                    callback_data=f"sys:track:confirm_delete:{idx}"
+                    callback_data=f"sys:confirm_delete:{idx}"
                 )],
                 [InlineKeyboardButton(
                     text="← Отмена",
@@ -223,11 +223,11 @@ async def sys_track_action(callback: types.CallbackQuery):
     await sys_tracks_menu(callback)
 
 
-@router.callback_query(F.data.startswith("sys:track:confirm_delete:"))
+@router.callback_query(F.data.startswith("sys:confirm_delete:"))
 async def sys_track_confirm_delete(callback: types.CallbackQuery):
     """Подтверждённое удаление трека"""
     parts = callback.data.split(":")
-    idx = int(parts[3])
+    idx = int(parts[2])
 
     async with async_session() as session:
         result = await session.execute(
@@ -262,7 +262,7 @@ async def sys_track_confirm_delete(callback: types.CallbackQuery):
     await sys_tracks_menu(callback)
 
 
-@router.callback_query(F.data.startswith("sys:track:add_template:"))
+@router.callback_query(F.data.startswith("sys:template:add:"))
 async def sys_track_add_template(callback: types.CallbackQuery):
     """Добавляет трек из шаблона"""
     name = callback.data.split(":", 3)[3]
