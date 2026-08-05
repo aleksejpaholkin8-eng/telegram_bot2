@@ -48,22 +48,15 @@ async def cmd_roles(message: types.Message):
 
         chunk_size = 15
         if not roles:
-            await message.answer(f"🎭 <b>Роли (тариф: {user.tariff.upper()}):</b>
-
-Нет доступных ролей.")
+            await message.answer(f"🎭 <b>Роли (тариф: {user.tariff.upper()}):</b>\n\nНет доступных ролей.")
             return
 
         for i in range(0, len(roles), chunk_size):
             chunk = roles[i:i + chunk_size]
-            text = f"🎭 <b>Роли {i+1}-{i+len(chunk)} из {len(roles)}</b> (тариф: {user.tariff.upper()})
-
-"
+            text = f"🎭 <b>Роли {i+1}-{i+len(chunk)} из {len(roles)}</b> (тариф: {user.tariff.upper()})\n\n"
             for role in chunk:
                 icon = "🆓" if role.tier_access == "lite" else "💎"
-                text += f"{icon} <b>{role.name}</b>
-   🔑 {role.keywords}
-
-"
+                text += f"{icon} <b>{role.name}</b>\n   🔑 {role.keywords}\n\n"
             await message.answer(text)
 
 
@@ -79,20 +72,15 @@ async def cmd_commands(message: types.Message):
 
         chunk_size = 20
         if not commands:
-            await message.answer(f"⌨️ <b>Команды (тариф: {user.tariff.upper()}):</b>
-
-Нет доступных команд.")
+            await message.answer(f"⌨️ <b>Команды (тариф: {user.tariff.upper()}):</b>\n\nНет доступных команд.")
             return
 
         for i in range(0, len(commands), chunk_size):
             chunk = commands[i:i + chunk_size]
-            text = f"⌨️ <b>Команды {i+1}-{i+len(chunk)} из {len(commands)}</b> (тариф: {user.tariff.upper()})
-
-"
+            text = f"⌨️ <b>Команды {i+1}-{i+len(chunk)} из {len(commands)}</b> (тариф: {user.tariff.upper()})\n\n"
             for cmd in chunk:
                 icon = "✅" if cmd.tier_access == "lite" else "🔒"
-                text += f"{icon} <b>{cmd.name}</b> — {cmd.description}
-"
+                text += f"{icon} <b>{cmd.name}</b> — {cmd.description}\n"
             await message.answer(text)
 
 
@@ -102,11 +90,8 @@ async def cmd_search(message: types.Message):
     has_access, _ = await check_feature_access(user.tariff, "web_search")
     if not has_access:
         await message.answer(
-            f"🔒 <b>Веб-поиск недоступен</b>
-
-"
-            f"В тарифе {user.tariff.upper()} эта функция отключена.
-"
+            f"🔒 <b>Веб-поиск недоступен</b>\n\n"
+            f"В тарифе {user.tariff.upper()} эта функция отключена.\n"
             "Обнови до Pro или Business: /admin (если ты владелец)"
         )
         return
@@ -114,14 +99,9 @@ async def cmd_search(message: types.Message):
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.answer(
-            "🔍 <b>Поиск в интернете</b>
-
-"
-            "Формат: <code>/search запрос</code>
-"
-            "Пример: <code>/search python asyncio tutorial</code>
-
-"
+            "🔍 <b>Поиск в интернете</b>\n\n"
+            "Формат: <code>/search запрос</code>\n"
+            "Пример: <code>/search python asyncio tutorial</code>\n\n"
             "💡 Результаты будут включены в ответ AI."
         )
         return
@@ -134,27 +114,15 @@ async def cmd_search(message: types.Message):
         await wait_msg.edit_text(error)
         return
 
-    text = f"🔍 <b>Результаты поиска:</b> <i>{query}</i>
-
-"
+    text = f"🔍 <b>Результаты поиска:</b> <i>{query}</i>\n\n"
     for i, r in enumerate(results, 1):
-        text += f"{i}. <b>{r['title']}</b>
-   {r['snippet'][:150]}...
-   <a href='{r['url']}'>Ссылка</a>
-
-"
+        text += f"{i}. <b>{r['title']}</b>\n   {r['snippet'][:150]}...\n   <a href='{r['url']}'>Ссылка</a>\n\n"
 
     if len(text) > 4000:
         parts = []
-        current = f"🔍 <b>Результаты поиска:</b> <i>{query}</i>
-
-"
+        current = f"🔍 <b>Результаты поиска:</b> <i>{query}</i>\n\n"
         for i, r in enumerate(results, 1):
-            block = f"{i}. <b>{r['title']}</b>
-   {r['snippet'][:150]}...
-   <a href='{r['url']}'>Ссылка</a>
-
-"
+            block = f"{i}. <b>{r['title']}</b>\n   {r['snippet'][:150]}...\n   <a href='{r['url']}'>Ссылка</a>\n\n"
             if len(current) + len(block) > 4000:
                 parts.append(current)
                 current = block
@@ -175,11 +143,8 @@ async def cmd_searchai(message: types.Message):
     has_access, _ = await check_feature_access(user.tariff, "web_search")
     if not has_access:
         await message.answer(
-            f"🔒 <b>Поиск + AI недоступен</b>
-
-"
-            f"В тарифе {user.tariff.upper()} веб-поиск отключён.
-"
+            f"🔒 <b>Поиск + AI недоступен</b>\n\n"
+            f"В тарифе {user.tariff.upper()} веб-поиск отключён.\n"
             "Админ может включить через /admin → ⚙️ Фичи тарифа."
         )
         return
@@ -187,18 +152,11 @@ async def cmd_searchai(message: types.Message):
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.answer(
-            "🔍 <b>Поиск + AI</b>
-
-"
-            "Формат: <code>/searchai запрос</code>
-"
-            "Примеры:
-"
-            "<code>/searchai актуальные зарплаты python разработчик</code>
-"
-            "<code>/searchai новости DeepSeek 2026</code>
-
-"
+            "🔍 <b>Поиск + AI</b>\n\n"
+            "Формат: <code>/searchai запрос</code>\n"
+            "Примеры:\n"
+            "<code>/searchai актуальные зарплаты python разработчик</code>\n"
+            "<code>/searchai новости DeepSeek 2026</code>\n\n"
             "Бот найдёт информацию и даст развёрнутый ответ через AI с указанием источников."
         )
         return
@@ -209,27 +167,15 @@ async def cmd_searchai(message: types.Message):
 
     if error:
         await wait_msg.edit_text(
-            f"❌ <b>Поиск не удался</b>
-
-{error}
-
-"
+            f"❌ <b>Поиск не удался</b>\n\n{error}\n\n"
             "Попробуй позже или задай вопрос без поиска — просто напиши текст."
         )
         return
 
-    search_context = "
-
-=== РЕЗУЛЬТАТЫ ПОИСКА В ИНТЕРНЕТЕ ===
-"
+    search_context = "\n\n=== РЕЗУЛЬТАТЫ ПОИСКА В ИНТЕРНЕТЕ ===\n"
     for i, r in enumerate(results, 1):
-        search_context += f"{i}. {r['title']}
-{r['snippet'][:400]}
-Источник: {r['url']}
-
-"
-    search_context += "=== КОНЕЦ ПОИСКА ===
-"
+        search_context += f"{i}. {r['title']}\n{r['snippet'][:400]}\nИсточник: {r['url']}\n\n"
+    search_context += "=== КОНЕЦ ПОИСКА ===\n"
 
     await wait_msg.edit_text(f"🔍 Найдено {len(results)} результатов. Анализирую через AI...")
 
@@ -241,11 +187,8 @@ async def cmd_searchai(message: types.Message):
     base_prompt = await build_system_prompt(message.from_user.id, selected_roles)
 
     system_prompt = (
-        base_prompt + "
-
-" + search_context +
-        "
-ИНСТРУКЦИЯ ДЛЯ AI: Ответь на вопрос пользователя, используя информацию из результатов поиска выше. "
+        base_prompt + "\n\n" + search_context +
+        "\nИНСТРУКЦИЯ ДЛЯ AI: Ответь на вопрос пользователя, используя информацию из результатов поиска выше. "
         "Если информации недостаточно — скажи об этом. В конце ответа перечисли источники (номера)."
     )
 
@@ -278,33 +221,23 @@ async def cmd_searchai(message: types.Message):
         except Exception:
             pass
 
-        sources = "
-
-📚 <b>Источники:</b>
-"
+        sources = "\n\n📚 <b>Источники:</b>\n"
         for i, r in enumerate(results[:3], 1):
-            sources += f"{i}. <a href='{r['url']}'>{r['title'][:60]}</a>
-"
+            sources += f"{i}. <a href='{r['url']}'>{r['title'][:60]}</a>\n"
 
-        full_text = f"🔍 <b>Ответ AI (с поиском):</b>
-
-{answer}{sources}"
+        full_text = f"🔍 <b>Ответ AI (с поиском):</b>\n\n{answer}{sources}"
 
         if len(full_text) > 4000:
             await wait_msg.delete()
             parts = _chunk_text(answer, 3800)
             for idx, part in enumerate(parts):
-                prefix = f"🔍 <b>Ответ AI (часть {idx+1}/{len(parts)}):</b>
-
-"
+                prefix = f"🔍 <b>Ответ AI (часть {idx+1}/{len(parts)}):</b>\n\n"
                 suffix = sources if idx == len(parts) - 1 else ""
                 await message.answer(prefix + part + suffix, disable_web_page_preview=True)
         else:
             await wait_msg.edit_text(full_text, disable_web_page_preview=True)
     else:
-        await wait_msg.edit_text(f"❌ <b>Ошибка AI:</b>
-
-{answer}")
+        await wait_msg.edit_text(f"❌ <b>Ошибка AI:</b>\n\n{answer}")
 
 
 @router.message(StateFilter(None))
@@ -313,17 +246,10 @@ async def smart_handler(message: types.Message):
 
     if user.tariff == "lite":
         await message.answer(
-            f"🤖 <b>Режим LITE</b>
-
-"
-            f"Вы написали: {message.text}
-
-"
-            f"В этом тарифе AI недоступен.
-"
-            f"Обнови до Pro, чтобы получить умные ответы.
-
-"
+            f"🤖 <b>Режим LITE</b>\n\n"
+            f"Вы написали: {message.text}\n\n"
+            f"В этом тарифе AI недоступен.\n"
+            f"Обнови до Pro, чтобы получить умные ответы.\n\n"
             f"💡 Команды: /start /help /register /roles /commands /setkey"
         )
         return
@@ -331,11 +257,7 @@ async def smart_handler(message: types.Message):
     has_access, limit_msg = await check_token_limit(message.from_user.id, user.tariff)
     if not has_access:
         await message.answer(
-            f"⛔ <b>Лимит исчерпан</b>
-
-{limit_msg}
-
-Вы написали: {message.text}"
+            f"⛔ <b>Лимит исчерпан</b>\n\n{limit_msg}\n\nВы написали: {message.text}"
         )
         return
 
@@ -345,16 +267,10 @@ async def smart_handler(message: types.Message):
     api_key, source = await get_api_key(message.from_user.id, provider=provider)
     if not api_key:
         await message.answer(
-            f"🔑 <b>Нет API-ключа</b>
-
-"
-            f"Варианты:
-"
-            f"1. Владелец бота ещё не добавил {provider.upper()}_API_KEY в Railway Variables
-"
-            f"2. Добавь свой ключ: /setkey (BYOK)
-
-"
+            f"🔑 <b>Нет API-ключа</b>\n\n"
+            f"Варианты:\n"
+            f"1. Владелец бота ещё не добавил {provider.upper()}_API_KEY в Railway Variables\n"
+            f"2. Добавь свой ключ: /setkey (BYOK)\n\n"
             f"Вы написали: {message.text}"
         )
         return
@@ -380,27 +296,20 @@ async def smart_handler(message: types.Message):
             focus_topic = us.json_passport.get("focus", "")
 
     if response_mode == "short":
-        system_prompt += "
-
-[РЕЖИМ: КРАТКО] Ответь максимально сжато: 3-5 тезисов, без вступлений и заключений."
+        system_prompt += "\n\n[РЕЖИМ: КРАТКО] Ответь максимально сжато: 3-5 тезисов, без вступлений и заключений."
         max_tokens = 500
     elif response_mode == "long":
-        system_prompt += "
-
-[РЕЖИМ: ПОДРОБНО] Ответь максимально развёрнуто, с примерами и деталями."
+        system_prompt += "\n\n[РЕЖИМ: ПОДРОБНО] Ответь максимально развёрнуто, с примерами и деталями."
         max_tokens = 2000
     else:
         max_tokens = 1000
 
     if focus_topic:
-        system_prompt += f"
-
-[ФОКУС: {focus_topic}] Приоритет этой теме. Адаптируй ответ."
+        system_prompt += f"\n\n[ФОКУС: {focus_topic}] Приоритет этой теме. Адаптируй ответ."
 
     roles_names = ", ".join([r.name.split(":")[0] for r in selected_roles[:3]])
     try:
-        await wait_msg.edit_text(f"⚡ Активированы роли: {roles_names}
-⏳ Думаю...")
+        await wait_msg.edit_text(f"⚡ Активированы роли: {roles_names}\n⏳ Думаю...")
     except Exception:
         pass
 
@@ -426,12 +335,8 @@ async def smart_handler(message: types.Message):
             pass
 
         source_icon = "🔑" if source == "byok" else "⚡"
-        roles_info = f"
-
-<i>🎭 Активные роли: {roles_names}</i>" if selected_roles else ""
-        full_text = f"{source_icon} <b>Ответ AI:</b>
-
-{answer}{roles_info}"
+        roles_info = f"\n\n<i>🎭 Активные роли: {roles_names}</i>" if selected_roles else ""
+        full_text = f"{source_icon} <b>Ответ AI:</b>\n\n{answer}{roles_info}"
 
         try:
             await wait_msg.delete()
@@ -441,9 +346,7 @@ async def smart_handler(message: types.Message):
         if len(full_text) > 4000:
             parts = _chunk_text(answer, 4000)
             for idx, part in enumerate(parts):
-                prefix = f"{source_icon} <b>Ответ AI (часть {idx+1}/{len(parts)}):</b>
-
-"
+                prefix = f"{source_icon} <b>Ответ AI (часть {idx+1}/{len(parts)}):</b>\n\n"
                 suffix = roles_info if idx == len(parts) - 1 else ""
                 await message.answer(prefix + part + suffix)
         else:
@@ -453,6 +356,4 @@ async def smart_handler(message: types.Message):
             await wait_msg.delete()
         except Exception:
             pass
-        await message.answer(f"❌ <b>Ошибка:</b>
-
-{answer}")
+        await message.answer(f"❌ <b>Ошибка:</b>\n\n{answer}")
