@@ -1,214 +1,213 @@
 from aiogram import Router, types, F
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 
+from bot.states import UserRegistration, ByokInput
 from db.database import async_session
-from db.models import UserState
-from bot.handlers.tracks import _get_tracks, _save_tracks
+from db.models import User, UserState, UserApiKey
+from services.encryption import encrypt_key
+from config.settings import settings
 
 router = Router()
 
 
-async def _set_response_mode(message: types.Message, mode: str):
+async def get_or_create_user(message: types.Message):
     async with async_session() as session:
         result = await session.execute(
-            select(UserState).where(UserState.user_id == message.from_user.id)
+            select(User).where(User.telegram_id == message.from_user.id)
         )
-        us = result.scalar_one_or_none()
-        if not us:
-            us = UserState(user_id=message.from_user.id, json_passport={"response_mode": mode}, tracks=[], counters={})
-            session.add(us)
-        else:
-            passport = us.json_passport or {}
-            passport["response_mode"] = mode
-            us.json_passport = passport
-        await session.commit()
+        user = result.scalar_one_or_none()
+        if not user:
+            user = User(
+                telegram_id=message.from_user.id,
+                username=message.from_user.username,
+                first_name=message.from_user.first_name,
+                last_name=message.from_user.last_name,
+                tariff="lite"
+            )
+            session.add(user)
+            await session.commit()
+        return user
 
-    mode_text = "📄 Сжатый" if mode == "short" else "📖 Развёрнутый"
-    await message.answer(f"✅ Режим ответа: <b>{mode_text}</b> Следующий запрос к AI будет в этом формате. Сбросить: <code>!СБРОС</code>")
 
+@router.message(Command(commands="start"))
+async def cmd_start(message: types.Message, state: FSMContext):
+    await state.clear()
+    user = await get_or_create_user(message)
 
-async def _set_focus(message: types.Message, topic: str):
-    async with async_session() as session:
-        result = await session.execute(
-            select(UserState).where(UserState.user_id == message.from_user.id)
+    cmds = (
+        "/start — начало\n"
+        "/help — справка\n"
+        "/system — <b>главное меню</b> (треки, фокус, прогресс)\n"
+        "/register — регистрация\n"
+        "/roles — доступные роли\n"
+        "/commands — доступные команды\n"
+        "/setkey — добавить свой API-ключ (BYOK)\n"
+    )
+
+    if message.from_user.id == settings.owner_id:
+        cmds += "/admin — настройка тарифов\n/upload_prompt — загрузить промпт\n/settariff — сменить свой тариф\n"
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔧 Админ-меню")]], resize_keyboard=True)
+        await message.answer(
+            f"👋 <b>Привет, владелец!</b>\n\n"
+            f"🎫 Твой тариф: <b>{user.tariff.upper()}</b>\n\n"
+            f"📋 Команды:\n{cmds}\n"
+            f"💡 Просто напиши сообщение — и я отвечу через AI.",
+            reply_markup=kb
         )
-        us = result.scalar_one_or_none()
-        if not us:
-            us = UserState(user_id=message.from_user.id, json_passport={"focus": topic}, tracks=[], counters={})
-            session.add(us)
-        else:
-            passport = us.json_passport or {}
-            passport["focus"] = topic
-            us.json_passport = passport
-        await session.commit()
+    else:
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🎛 Меню")]], resize_keyboard=True)
+        await message.answer(
+            f"👋 <b>Привет, {user.first_name or 'друг'}!</b>\n\n"
+            f"🎫 Твой тариф: <b>{user.tariff.upper()}</b>\n\n"
+            f"📋 Команды:\n{cmds}\n"
+            f"💡 Просто напиши сообщение — и я отвечу через AI (если тариф позволяет).",
+            reply_markup=kb
+        )
 
+
+@router.message(Command(commands="help"))
+async def cmd_help(message: types.Message):
     await message.answer(
-        f"🎯 <b>Фокус установлен:</b> <i>{topic}</i>"
-        "AI будет приоритизировать эту тему."
-        "Сбросить: <code>!СБРОС</code>"
+        "📖 <b>Справка</b>\n\n"
+        "🎛 <b>Главное меню:</b> /system\n\n"
+        "📋 <b>Команды:</b>\n"
+        "• /start — перезапустить\n"
+        "• /help — это сообщение\n"
+        "• /system — управление треками, фокус, прогресс (кнопки)\n"
+        "• /register — сохранить имя и цель\n"
+        "• /roles — показать роли твоего тарифа\n"
+        "• /commands — список системных команд\n"
+        "• /setkey — ввести свой API-ключ (BYOK)\n"
+        "• /search [запрос] — поиск в интернете (Pro/Business)\n"
+        "• /searchai [запрос] — поиск + ответ AI (Pro/Business)\n\n"
+        "🎫 <b>Тарифы:</b>\n"
+        "🆓 Lite — команды и эхо, без AI\n"
+        "⚡ Pro — AI через ключ владельца или свой (BYOK)\n"
+        "💎 Business — максимум ролей и функций"
     )
 
 
-async def _reset_settings(message: types.Message):
+@router.message(Command(commands="register"))
+async def cmd_register(message: types.Message, state: FSMContext):
+    await state.set_state(UserRegistration.waiting_for_name)
+    await message.answer("📝 <b>Регистрация</b>\n\nШаг 1 из 3\nКак тебя зовут?")
+
+
+@router.message(UserRegistration.waiting_for_name)
+async def process_name(message: types.Message, state: FSMContext):
+    await state.update_data(name=message.text)
+    await state.set_state(UserRegistration.waiting_for_goal)
+    await message.answer(f"Приятно познакомиться, <b>{message.text}</b>!\n\nШаг 2 из 3\nКакая твоя главная цель?")
+
+
+@router.message(UserRegistration.waiting_for_goal)
+async def process_goal(message: types.Message, state: FSMContext):
+    await state.update_data(goal=message.text)
+    data = await state.get_data()
+    await state.set_state(UserRegistration.waiting_for_confirm)
+    await message.answer(
+        f"📋 <b>Проверь данные:</b>\n\n"
+        f"👤 Имя: {data['name']}\n"
+        f"🎯 Цель: {data['goal']}\n\n"
+        f"Шаг 3 из 3. Всё верно? Напиши <b>да</b> или <b>нет</b>."
+    )
+
+
+@router.message(UserRegistration.waiting_for_confirm, F.text.lower() == "да")
+async def process_confirm_yes(message: types.Message, state: FSMContext):
+    data = await state.get_data()
     async with async_session() as session:
         result = await session.execute(
             select(UserState).where(UserState.user_id == message.from_user.id)
         )
         us = result.scalar_one_or_none()
-        if us:
-            passport = us.json_passport or {}
-            passport.pop("response_mode", None)
-            passport.pop("focus", None)
-            us.json_passport = passport
-            await session.commit()
+        if not us:
+            us = UserState(user_id=message.from_user.id, json_passport={"name": data['name'], "goal": data['goal']})
+            session.add(us)
+        else:
+            us.json_passport = {"name": data['name'], "goal": data['goal']}
+        await session.commit()
+    await state.clear()
+    await message.answer(
+        f"✅ <b>Регистрация завершена!</b>\n\n"
+        f"👤 Имя: {data['name']}\n"
+        f"🎯 Цель: {data['goal']}\n\n"
+        f"💾 Данные сохранены в базу данных."
+    )
 
-    await message.answer("🔄 <b>Настройки сброшены.</b> Стандартный режим, фокус снят.")
+
+@router.message(UserRegistration.waiting_for_confirm, F.text.lower() == "нет")
+async def process_confirm_no(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Регистрация отменена. Напиши /register, чтобы начать заново.")
 
 
-@router.message(F.text.startswith("!"))
-async def system_commands(message: types.Message):
-    text = message.text.strip()
-    parts = text.split(maxsplit=2)
-    cmd = parts[0].upper()
+@router.message(UserRegistration.waiting_for_confirm)
+async def process_confirm_invalid(message: types.Message):
+    await message.answer("Не понял. Напиши <b>да</b> или <b>нет</b>.")
+
+
+@router.message(Command(commands="setkey"))
+async def cmd_setkey(message: types.Message, state: FSMContext):
+    await state.set_state(ByokInput.waiting_for_key)
+    await message.answer(
+        "🔑 <b>Ввод API-ключа (BYOK)</b>\n\n"
+        "Отправь свой ключ в следующем сообщении.\n"
+        "Поддерживаются:\n"
+        "• xAI (Grok): <code>xai-...</code>\n"
+        "• Groq: <code>gsk_...</code>\n\n"
+        "⚠️ Ключ будет сохранён в зашифрованном виде.\n"
+        "Для отмены напиши /start."
+    )
+
+
+@router.message(ByokInput.waiting_for_key)
+async def process_byok_key(message: types.Message, state: FSMContext):
+    key = message.text.strip()
+    if key.startswith("xai-"):
+        provider = "xai"
+    elif key.startswith("gsk_"):
+        provider = "groq"
+    else:
+        await message.answer(
+            "❌ Неизвестный формат ключа.\n"
+            "Поддерживаются:\n"
+            "• xAI: <code>xai-...</code>\n"
+            "• Groq: <code>gsk_...</code>\n\n"
+            "Попробуй снова или /start для отмены."
+        )
+        return
+
+    try:
+        encrypted = encrypt_key(key)
+    except ValueError as e:
+        await message.answer(
+            f"❌ <b>Ошибка шифрования:</b>\n\n{str(e)}\n\n"
+            "Администратору нужно добавить ENCRYPTION_KEY в переменные окружения."
+        )
+        await state.clear()
+        return
 
     async with async_session() as session:
         result = await session.execute(
-            select(UserState).where(UserState.user_id == message.from_user.id)
-        )
-        user_state = result.scalar_one_or_none()
-        if not user_state:
-            user_state = UserState(user_id=message.from_user.id, tracks=[], json_passport={}, counters={})
-            session.add(user_state)
-            await session.commit()
-
-    if cmd == "!ТРЕКИ":
-        tracks = _get_tracks(user_state)
-        if not tracks:
-            await message.answer(
-                "📋 <b>Треки</b>"
-                "У тебя пока нет активных треков."
-                "Добавь: <code>!ТРЕК ДОБАВИТЬ Название</code>"
-                "💡 Примеры:"
-                "• Строительство/МОК"
-                "• Карьера/Вахта"
-                "• Инвестиции"
-                "• Корея/TOPIK"
-                "• ИИ и технологии/Обучение"
-                "• Психология/Дисциплина"
+            select(UserApiKey).where(
+                UserApiKey.user_id == message.from_user.id,
+                UserApiKey.provider == provider
             )
-            return
-
-        active = [t for t in tracks if t.get("status") == "active"]
-        paused = [t for t in tracks if t.get("status") == "paused"]
-        text = "📋 <b>Твои треки:</b>"
-        for t in active:
-            text += f"🟢 <b>{t['name']}</b>"
-        for t in paused:
-            text += f"⏸ <b>{t['name']}</b> (на паузе)"
-        text += f"📊 Всего: {len(tracks)} | 🟢 Активных: {len(active)} | ⏸ Пауза: {len(paused)}"
-        await message.answer(text)
-        return
-
-    if cmd == "!ТРЕК" and len(parts) >= 3 and parts[1].upper() == "ДОБАВИТЬ":
-        name = parts[2].strip()
-        tracks = _get_tracks(user_state)
-        if any(t["name"].lower() == name.lower() for t in tracks):
-            await message.answer(f"⚠️ Трек «{name}» уже есть.")
-            return
-        tracks.append({"name": name, "status": "active", "hours": 0.0, "goal_hours": 0.0})
-        _save_tracks(user_state, tracks)
-        async with async_session() as session:
-            await session.commit()
-        await message.answer(f"✅ Трек «<b>{name}</b>» добавлен! Всего треков: {len(tracks)} Смотри: <code>!ТРЕКИ</code>")
-        return
-
-    if cmd == "!ТРЕК" and len(parts) >= 3 and parts[1].upper() == "УДАЛИТЬ":
-        name = parts[2].strip()
-        tracks = _get_tracks(user_state)
-        new_tracks = [t for t in tracks if t["name"].lower() != name.lower()]
-        if len(new_tracks) == len(tracks):
-            await message.answer(f"❌ Трек «{name}» не найден. Смотри: <code>!ТРЕКИ</code>")
-            return
-        _save_tracks(user_state, new_tracks)
-        async with async_session() as session:
-            await session.commit()
-        await message.answer(f"🗑 Трек «<b>{name}</b>» удалён.")
-        return
-
-    if cmd == "!ТРЕК" and len(parts) >= 3 and parts[1].upper() == "ПАУЗА":
-        name = parts[2].strip()
-        tracks = _get_tracks(user_state)
-        found = False
-        for t in tracks:
-            if t["name"].lower() == name.lower():
-                t["status"] = "paused"
-                found = True
-                break
-        if not found:
-            await message.answer(f"❌ Трек «{name}» не найден.")
-            return
-        _save_tracks(user_state, tracks)
-        async with async_session() as session:
-            await session.commit()
-        await message.answer(f"⏸ Трек «<b>{name}</b>» поставлен на паузу.")
-        return
-
-    if cmd == "!ПРОГРЕСС":
-        tracks = _get_tracks(user_state)
-        active = [t for t in tracks if t.get("status") == "active"]
-        paused = [t for t in tracks if t.get("status") == "paused"]
-        if not tracks:
-            await message.answer("📊 <b>Прогресс</b> У тебя пока нет треков. Добавь первый: <code>!ТРЕК ДОБАВИТЬ Название</code>")
-            return
-        text = "📊 <b>Прогресс по трекам</b>"
-        for t in active:
-            text += f"🟢 <b>{t['name']}</b>"
-        for t in paused:
-            text += f"⏸ <b>{t['name']}</b>"
-        text += f"📈 Всего: {len(tracks)} | Активных: {len(active)} | На паузе: {len(paused)} 💡 Подробный дашборд в разработке."
-        await message.answer(text)
-        return
-
-    if cmd == "!ВРЕМЯ":
-        await message.answer(
-            "⏱ <b>!ВРЕМЯ</b>"
-            "Формат: <code>!ВРЕМЯ [название трека] [часы]</code>"
-            "Пример: <code>!ВРЕМЯ Корея/TOPIK 2</code>"
-            "⚠️ Полный функционал счётчика часов — в разработке."
         )
-        return
+        old = result.scalar_one_or_none()
+        if old:
+            await session.delete(old)
+        session.add(UserApiKey(user_id=message.from_user.id, provider=provider, key_encrypted=encrypted))
+        await session.commit()
 
-    if cmd == "!ЖМИ":
-        await _set_response_mode(message, "short")
-        return
-    if cmd == "!РАЗВЕРНИ":
-        await _set_response_mode(message, "long")
-        return
-
-    if cmd == "!ФОКУС":
-        topic = parts[1] if len(parts) > 1 else ""
-        if not topic:
-            await message.answer("🎯 <b>!ФОКУС</b> Укажи тему: <code>!ФОКУС [тема]</code> Пример: <code>!ФОКУС Корея</code>")
-            return
-        await _set_focus(message, topic)
-        return
-
-    if cmd == "!СБРОС":
-        await _reset_settings(message)
-        return
-
+    await state.clear()
     await message.answer(
-        f"❓ Неизвестная команда: <code>{message.text[:30]}</code>"
-        "📋 <b>Доступные !-команды:</b>"
-        "<code>!ТРЕКИ</code> — список треков"
-        "<code>!ТРЕК ДОБАВИТЬ Название</code>"
-        "<code>!ТРЕК УДАЛИТЬ Название</code>"
-        "<code>!ТРЕК ПАУЗА Название</code>"
-        "<code>!ПРОГРЕСС</code> — прогресс по трекам"
-        "<code>!ВРЕМЯ [трек] [часы]</code>"
-        "<code>!ЖМИ</code> — сжатый ответ"
-        "<code>!РАЗВЕРНИ</code> — подробный ответ"
-        "<code>!ФОКУС [тема]</code> — приоритет темы"
-        "<code>!СБРОС</code> — сброс настроек"
-        "🎛 Или используй кнопки: <code>/system</code>"
+        f"✅ <b>Ключ {provider.upper()} сохранён!</b>\n\n"
+        f"Теперь ты используешь BYOK-режим.\n"
+        f"Расходы на токены — на твоём счету."
     )
