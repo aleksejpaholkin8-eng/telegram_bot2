@@ -149,7 +149,7 @@ async def system_commands(message: types.Message):
             await message.answer(f"⚠️ Трек «{name}» уже есть в списке.")
             return
 
-        tracks.append({"name": name, "status": "active"})
+        tracks.append({"name": name, "status": "active", "hours": 0.0, "goal_hours": 0.0})
         _save_tracks(user_state, tracks)
 
         async with async_session() as session:
