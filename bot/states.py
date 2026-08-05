@@ -23,8 +23,12 @@ class AdminEditLimit(StatesGroup):
     waiting_for_value = State()
 
 
-# ============ НОВОЕ: Интерактивное меню треков ============
 class TrackMenu(StatesGroup):
     """Диалог управления треками через кнопки"""
     waiting_for_name = State()      
     action = State()                 
+
+
+class FocusInput(StatesGroup):
+    """Диалог установки фокуса через кнопку"""
+    waiting_for_topic = State()
