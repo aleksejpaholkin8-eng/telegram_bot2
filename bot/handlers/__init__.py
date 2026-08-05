@@ -8,6 +8,8 @@ from bot.handlers.ai import router as ai_router
 
 router = Router()
 
+# Подключаем в порядке приоритета:
+# сначала специфичные команды, потом общие (smart_handler в ai.py — последний)
 router.include_router(common_router)
 router.include_router(admin_router)
 router.include_router(tracks_router)
