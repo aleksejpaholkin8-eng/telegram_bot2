@@ -12,18 +12,13 @@ from config.settings import settings
 from db.database import async_session
 from db.models import UserApiKey
 from sqlalchemy import select
-from services.encryption import decrypt_key  # ← ИСПРАВЛЕНИЕ: Fernet-расшифровка
+from services.encryption import decrypt_key
 
 if LITELLM_AVAILABLE:
     litellm.drop_params = True
 
 
 async def get_api_key(user_id: int, provider: str = "xai") -> Tuple[str, str]:
-    """
-    Находит API-ключ для пользователя.
-    BYOK → owner → none
-    """
-    # 1. Проверяем BYOK
     async with async_session() as session:
         result = await session.execute(
             select(UserApiKey).where(
@@ -32,17 +27,14 @@ async def get_api_key(user_id: int, provider: str = "xai") -> Tuple[str, str]:
             )
         )
         byok = result.scalar_one_or_none()
-        
         if byok:
             try:
-                # ← ИСПРАВЛЕНИЕ: расшифровываем через Fernet
                 key = decrypt_key(byok.key_encrypted)
                 if key:
                     return key, "byok"
             except Exception as e:
                 logging.error(f"Ошибка расшифровки BYOK: {e}")
-    
-    # 2. Проверяем owner-ключ
+
     owner_keys = {
         "groq": settings.groq_api_key,
         "xai": settings.xai_api_key,
@@ -51,11 +43,9 @@ async def get_api_key(user_id: int, provider: str = "xai") -> Tuple[str, str]:
         "openai": settings.openai_api_key,
         "anthropic": settings.anthropic_api_key,
     }
-    
     key = owner_keys.get(provider, "")
     if key:
         return key, "owner"
-    
     return "", "none"
 
 
@@ -66,18 +56,12 @@ async def ask_llm(
     system_prompt: str = "",
     max_tokens: int = 1000
 ) -> Tuple[str, bool]:
-    """
-    Отправляет запрос к AI-модели.
-    По умолчанию используем Groq (бесплатный tier).
-    """
     if not LITELLM_AVAILABLE:
         return "❌ LiteLLM не установлен", False
-    
-    # Определяем провайдера из названия модели (groq/... или xai/...)
+
     provider = model.split("/")[0] if "/" in model else "groq"
-    
     api_key, source = await get_api_key(user_id, provider=provider)
-    
+
     if not api_key:
         return (
             "🔑 Нет API-ключа.\n\n"
@@ -86,12 +70,12 @@ async def ask_llm(
             "2. Добавь свой ключ: /setkey",
             False
         )
-    
+
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
-    
+
     try:
         response = await litellm.acompletion(
             model=model,
@@ -100,10 +84,8 @@ async def ask_llm(
             max_tokens=max_tokens,
             temperature=0.7,
         )
-        
         answer = response.choices[0].message.content
         return answer, True
-        
     except Exception as e:
         logging.error(f"Ошибка LLM: {e}")
         return f"❌ Ошибка AI:\n\n{str(e)[:300]}", False
