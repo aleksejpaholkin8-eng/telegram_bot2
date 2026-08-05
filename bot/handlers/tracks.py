@@ -364,26 +364,221 @@ async def sys_tracks_process_name(message: types.Message, state: FSMContext):
     await message.answer("Что дальше?", reply_markup=builder.as_markup())
 
 
-# ============ ЗАГЛУШКИ ДЛЯ ОСТАЛЬНЫХ РАЗДЕЛОВ /system ============
+# ============ ЗАГЛУШКИ → РАБОЧИЕ ВЕРСИИ ============
 
 @router.callback_query(F.data == "sys:focus:menu")
-async def sys_focus_stub(callback: types.CallbackQuery):
-    await callback.answer("⚡ Фокус — в разработке", show_alert=True)
+async def sys_focus_menu(callback: types.CallbackQuery, state: FSMContext):
+    """Интерактивная установка фокуса через FSM"""
+    await state.set_state(FocusInput.waiting_for_topic)
+    await callback.message.answer(
+        "🎯 <b>Установка фокуса</b>\n\n"
+        "Введи тему, на которой хочешь сфокусироваться.\n"
+        "Примеры: <code>Корея</code>, <code>Строительство</code>, <code>Инвестиции</code>\n\n"
+        "Для отмены напиши /start"
+    )
+    await callback.answer()
+
+
+@router.message(FocusInput.waiting_for_topic)
+async def sys_focus_process(message: types.Message, state: FSMContext):
+    """Сохраняет фокус из FSM-диалога"""
+    topic = message.text.strip()
+    if not topic:
+        await message.answer("❌ Тема не может быть пустой. Попробуй ещё раз.")
+        return
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserState).where(UserState.user_id == message.from_user.id)
+        )
+        us = result.scalar_one_or_none()
+        if not us:
+            us = UserState(
+                user_id=message.from_user.id,
+                json_passport={"focus": topic},
+                tracks=[],
+                counters={}
+            )
+            session.add(us)
+        else:
+            passport = us.json_passport or {}
+            passport["focus"] = topic
+            us.json_passport = passport
+        await session.commit()
+
+    await state.clear()
+    await message.answer(
+        f"🎯 <b>Фокус установлен:</b> <i>{topic}</i>\n\n"
+        f"AI будет приоритизировать эту тему в ответах.\n"
+        f"Сбросить: <code>!СБРОС</code>"
+    )
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🎛 Главное меню", callback_data="sys:main")
+    await message.answer("Что дальше?", reply_markup=builder.as_markup())
 
 
 @router.callback_query(F.data == "sys:progress")
-async def sys_progress_stub(callback: types.CallbackQuery):
-    await callback.answer("📊 Прогресс — в разработке", show_alert=True)
+async def sys_progress_callback(callback: types.CallbackQuery):
+    """Прогресс через кнопку /system"""
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserState).where(UserState.user_id == callback.from_user.id)
+        )
+        user_state = result.scalar_one_or_none()
+        tracks = _get_tracks(user_state) if user_state else []
+
+    active = [t for t in tracks if t.get("status") == "active"]
+    paused = [t for t in tracks if t.get("status") == "paused"]
+
+    if not tracks:
+        text = (
+            "📊 <b>Прогресс</b>\n\n"
+            "У тебя пока нет треков.\n"
+            "Добавь первый через <code>/system</code> → 🎯 Треки"
+        )
+    else:
+        text = "📊 <b>Прогресс по трекам</b>\n\n"
+        for t in active:
+            hrs = t.get("hours", 0)
+            text += f"🟢 <b>{t['name']}</b> — {hrs}ч\n"
+        for t in paused:
+            hrs = t.get("hours", 0)
+            text += f"⏸ <b>{t['name']}</b> — {hrs}ч\n"
+        text += f"\n📈 Всего: {len(tracks)} | Активных: {len(active)} | На паузе: {len(paused)}"
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="← Назад в меню", callback_data="sys:main")
+
+    await callback.message.answer(text, reply_markup=builder.as_markup())
+    await callback.answer()
 
 
 @router.callback_query(F.data == "sys:ai_mode")
-async def sys_ai_mode_stub(callback: types.CallbackQuery):
-    await callback.answer("🧠 AI-режим — в разработке", show_alert=True)
+async def sys_ai_mode(callback: types.CallbackQuery):
+    """Переключение режима ответа AI"""
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserState).where(UserState.user_id == callback.from_user.id)
+        )
+        us = result.scalar_one_or_none()
+        mode = "long"
+        if us and us.json_passport:
+            mode = us.json_passport.get("response_mode", "long")
+
+    current = "📖 Развёрнутый" if mode == "long" else "📄 Сжатый"
+
+    text = (
+        f"🧠 <b>AI-режим ответа</b>\n\n"
+        f"Текущий: <b>{current}</b>\n\n"
+        f"Выбери формат:"
+    )
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📄 Сжатый (!ЖМИ)", callback_data="sys:ai_mode:set:short")
+    builder.button(text="📖 Развёрнутый (!РАЗВЕРНИ)", callback_data="sys:ai_mode:set:long")
+    builder.button(text="🔄 Сброс (!СБРОС)", callback_data="sys:ai_mode:set:reset")
+    builder.button(text="← Назад", callback_data="sys:main")
+    builder.adjust(1)
+
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("sys:ai_mode:set:"))
+async def sys_ai_mode_set(callback: types.CallbackQuery):
+    """Применяет выбранный AI-режим"""
+    mode = callback.data.split(":")[3]
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserState).where(UserState.user_id == callback.from_user.id)
+        )
+        us = result.scalar_one_or_none()
+        if not us:
+            us = UserState(
+                user_id=callback.from_user.id,
+                json_passport={},
+                tracks=[],
+                counters={}
+            )
+            session.add(us)
+
+        passport = us.json_passport or {}
+        if mode == "reset":
+            passport.pop("response_mode", None)
+            passport.pop("focus", None)
+            msg = "🔄 Настройки сброшены"
+        else:
+            passport["response_mode"] = mode
+            msg = "📄 Сжатый режим" if mode == "short" else "📖 Развёрнутый режим"
+        us.json_passport = passport
+        await session.commit()
+
+    await callback.answer(msg)
+    # Возвращаемся в главное меню
+    await cmd_system(callback.message)
 
 
 @router.callback_query(F.data == "sys:profile")
-async def sys_profile_stub(callback: types.CallbackQuery):
-    await callback.answer("📋 Мои данные — в разработке", show_alert=True)
+async def sys_profile(callback: types.CallbackQuery):
+    """Показывает JSON-паспорт пользователя"""
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserState).where(UserState.user_id == callback.from_user.id)
+        )
+        us = result.scalar_one_or_none()
+
+        from db.models import User
+        result2 = await session.execute(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )
+        user = result2.scalar_one_or_none()
+
+    passport = us.json_passport if us else {}
+    tracks = _get_tracks(us) if us else []
+    active = [t for t in tracks if t.get("status") == "active"]
+    paused = [t for t in tracks if t.get("status") == "paused"]
+
+    name = passport.get("name", callback.from_user.first_name or "Не указано")
+    goal = passport.get("goal", "Не указана")
+    focus = passport.get("focus", "Не установлен")
+    mode = "📖 Развёрнутый" if passport.get("response_mode") != "short" else "📄 Сжатый"
+    tariff = user.tariff if user else "lite"
+
+    text = (
+        f"📋 <b>Мои данные</b>\n\n"
+        f"👤 <b>Имя:</b> {name}\n"
+        f"🎯 <b>Цель:</b> {goal}\n"
+        f"⚡ <b>Фокус:</b> {focus}\n"
+        f"🧠 <b>Режим AI:</b> {mode}\n"
+        f"💎 <b>Тариф:</b> {tariff.upper()}\n\n"
+        f"📊 <b>Треки:</b> {len(tracks)} (🟢{len(active)} / ⏸{len(paused)})"
+    )
+
+    if tracks:
+        text += "\n\n<b>Активные:</b>\n"
+        for t in active:
+            text += f"• {t['name']}\n"
+        if paused:
+            text += "\n<b>На паузе:</b>\n"
+            for t in paused:
+                text += f"• {t['name']}\n"
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="← Назад", callback_data="sys:main")
+
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "sys:main")
+async def sys_back_to_main(callback: types.CallbackQuery):
+    await cmd_system(callback.message)
+    await callback.answer()
+
+
+# ============ ЗАГЛУШКИ ДЛЯ ОСТАЛЬНЫХ РАЗДЕЛОВ /system ============
 
 
 @router.callback_query(F.data == "sys:main")
