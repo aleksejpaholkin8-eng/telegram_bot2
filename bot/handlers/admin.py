@@ -50,16 +50,10 @@ async def cmd_settariff(message: types.Message):
     args = message.text.split()
     if len(args) < 2:
         await message.answer(
-            "🎫 <b>Смена тарифа</b>
-
-"
-            "Формат: <code>/settariff lite</code>
-"
-            "Формат: <code>/settariff pro</code>
-"
-            "Формат: <code>/settariff business</code>
-
-"
+            "🎫 <b>Смена тарифа</b>"
+            "Формат: <code>/settariff lite</code>"
+            "Формат: <code>/settariff pro</code>"
+            "Формат: <code>/settariff business</code>"
             f"Твой текущий ID: <code>{message.from_user.id}</code>"
         )
         return
@@ -82,14 +76,9 @@ async def cmd_settariff(message: types.Message):
         await session.commit()
 
     await message.answer(
-        f"✅ <b>Тариф изменён!</b>
-
-"
-        f"Было: {old_tariff.upper()}
-"
-        f"Стало: {new_tariff.upper()}
-
-"
+        f"✅ <b>Тариф изменён!</b>"
+        f"Было: {old_tariff.upper()}"
+        f"Стало: {new_tariff.upper()}"
         f"Перезапусти бота: /start"
     )
 
@@ -102,21 +91,12 @@ async def cmd_upload_prompt(message: types.Message, state: FSMContext):
 
     await state.set_state(UploadPrompt.waiting_for_file)
     await message.answer(
-        "📤 <b>Загрузка нового промпта</b>
-
-"
-        "Отправь мне файл <code>.md</code> (Промпт 1) или вставь его текст сообщением.
-
-"
-        "⚠️ <b>Важно:</b>
-"
-        "• Пользовательские данные (треки, паспорт, тариф) сохранятся
-"
-        "• Существующие роли обновятся, новые добавятся
-"
-        "• Для отмены напиши /start
-
-"
+        "📤 <b>Загрузка нового промпта</b>"
+        "Отправь мне файл <code>.md</code> (Промпт 1) или вставь его текст сообщением."
+        "⚠️ <b>Важно:</b>"
+        "• Пользовательские данные (треки, паспорт, тариф) сохранятся"
+        "• Существующие роли обновятся, новые добавятся"
+        "• Для отмены напиши /start"
         "Жду файл или текст..."
     )
 
@@ -170,9 +150,7 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
 
     if not parsed.roles and not parsed.rules:
         await wait_msg.edit_text(
-            "❌ В файле не найдены роли или правила.
-
-"
+            "❌ В файле не найдены роли или правила."
             "Проверь формат файла. Ожидается структура Промпта 1."
         )
         await state.clear()
@@ -239,20 +217,12 @@ async def _process_prompt_text(message: types.Message, text: str, wait_msg: type
 
     await state.clear()
     await wait_msg.edit_text(
-        f"✅ <b>Промпт загружен!</b>
-
-"
-        f"📊 <b>Статистика:</b>
-"
-        f"🎭 Роли: +{added_roles} новых, 🔄 {updated_roles} обновлено
-"
-        f"📜 Правила: +{added_rules} новых, 🔄 {updated_rules} обновлено
-"
-        f"⌨️ Команды: +{added_cmds} новых, 🔄 {updated_cmds} обновлено
-
-"
-        f"💾 Пользовательские данные сохранены.
-"
+        f"✅ <b>Промпт загружен!</b>"
+        f"📊 <b>Статистика:</b>"
+        f"🎭 Роли: +{added_roles} новых, 🔄 {updated_roles} обновлено"
+        f"📜 Правила: +{added_rules} новых, 🔄 {updated_rules} обновлено"
+        f"⌨️ Команды: +{added_cmds} новых, 🔄 {updated_cmds} обновлено"
+        f"💾 Пользовательские данные сохранены."
         f"Проверь: /roles, /commands"
     )
 
@@ -265,17 +235,12 @@ async def _render_tariff_features(target_message, tariff: str):
         features = result.scalars().all()
 
     icon = "🆓" if tariff == "lite" else "⚡" if tariff == "pro" else "💎"
-    text = f"{icon} <b>Настройки тарифа {tariff.upper()}</b>
-
-"
+    text = f"{icon} <b>Настройки тарифа {tariff.upper()}</b>"
     builder = InlineKeyboardBuilder()
 
     for feat in features:
         status = "✅ Вкл" if feat.access else "❌ Выкл"
-        text += f"<b>{feat.feature}</b>
-   Статус: {status} | Лимит: {feat.limit_value or '—'}
-
-"
+        text += f"<b>{feat.feature}</b> Статус: {status} | Лимит: {feat.limit_value or '—'}"
         action = "off" if feat.access else "on"
         btn_icon = "❌" if feat.access else "✅"
         builder.button(text=f"{btn_icon} {feat.feature}", callback_data=f"admin:toggle:{tariff}:{feat.feature}:{action}")
@@ -309,11 +274,7 @@ async def _render_roles_list(target_message, tariff: str, page: int = 0):
     end = start + per_page
     page_roles = all_roles[start:end]
 
-    text = f"{icon} <b>Роли для тарифа {tariff.upper()}</b> (стр. {page+1}/{total_pages})
-
-Нажми на роль, чтобы переключить доступ:
-
-"
+    text = f"{icon} <b>Роли для тарифа {tariff.upper()}</b> (стр. {page+1}/{total_pages}) Нажми на роль, чтобы переключить доступ:"
     builder = InlineKeyboardBuilder()
 
     for role in page_roles:
@@ -379,21 +340,12 @@ async def admin_edit_limit_start(callback: types.CallbackQuery, state: FSMContex
     await state.set_state(AdminEditLimit.waiting_for_value)
     await state.update_data(tariff=tariff, feature=feature)
     await callback.message.answer(
-        f"📝 <b>Изменение лимита</b>
-
-"
-        f"Тариф: <b>{tariff.upper()}</b>
-"
-        f"Функция: <b>{feature}</b>
-
-"
-        f"Введи новое числовое значение:
-"
-        f"• <code>0</code> — нет доступа / безлимит
-"
-        f"• <code>15</code>, <code>5000</code> и т.д. — конкретный лимит
-
-"
+        f"📝 <b>Изменение лимита</b>"
+        f"Тариф: <b>{tariff.upper()}</b>"
+        f"Функция: <b>{feature}</b>"
+        f"Введи новое числовое значение:"
+        f"• <code>0</code> — нет доступа / безлимит"
+        f"• <code>15</code>, <code>5000</code> и т.д. — конкретный лимит"
         f"Для отмены напиши /start"
     )
     await callback.answer()
@@ -425,16 +377,10 @@ async def admin_edit_limit_finish(message: types.Message, state: FSMContext):
 
     await state.clear()
     await message.answer(
-        f"✅ <b>Лимит обновлён!</b>
-
-"
-        f"Тариф: {tariff.upper()}
-"
-        f"Функция: {feature}
-"
-        f"Новый лимит: <b>{new_limit}</b>
-
-"
+        f"✅ <b>Лимит обновлён!</b>"
+        f"Тариф: {tariff.upper()}"
+        f"Функция: {feature}"
+        f"Новый лимит: <b>{new_limit}</b>"
         f"Проверь: /admin"
     )
 
@@ -454,9 +400,7 @@ async def admin_section_features(callback: types.CallbackQuery):
     builder.button(text="← Назад", callback_data="admin:menu")
     builder.adjust(3)
     await callback.message.edit_text(
-        "⚙️ <b>Настройка фич тарифа</b>
-
-Выбери тариф:",
+        "⚙️ <b>Настройка фич тарифа</b> Выбери тариф:",
         reply_markup=builder.as_markup()
     )
     await callback.answer()
@@ -471,12 +415,8 @@ async def admin_section_roles(callback: types.CallbackQuery):
     builder.button(text="← Назад", callback_data="admin:menu")
     builder.adjust(3)
     await callback.message.edit_text(
-        "🎭 <b>Настройка ролей по тарифам</b>
-
-"
-        "Здесь ты решаешь, какие роли доступны в каждом тарифе.
-
-"
+        "🎭 <b>Настройка ролей по тарифам</b>"
+        "Здесь ты решаешь, какие роли доступны в каждом тарифе."
         "Выбери тариф:",
         reply_markup=builder.as_markup()
     )
@@ -486,18 +426,11 @@ async def admin_section_roles(callback: types.CallbackQuery):
 @router.callback_query(F.data == "admin:commands")
 async def admin_commands_list(callback: types.CallbackQuery):
     text = (
-        "📋 <b>Админ-команды</b>
-
-"
-        "/admin — главное меню
-"
-        "/upload_prompt — загрузить новый промпт
-"
-        "/settariff [lite/pro/business] — сменить свой тариф
-"
-        "/setkey — ввести BYOK-ключ
-
-"
+        "📋 <b>Админ-команды</b>"
+        "/admin — главное меню"
+        "/upload_prompt — загрузить новый промпт"
+        "/settariff [lite/pro/business] — сменить свой тариф"
+        "/setkey — ввести BYOK-ключ"
         "⚠️ Все эти команды доступны только тебе (владельцу)."
     )
     builder = InlineKeyboardBuilder()
