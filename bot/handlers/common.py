@@ -24,10 +24,7 @@ async def _set_response_mode(message: types.Message, mode: str):
         await session.commit()
 
     mode_text = "📄 Сжатый" if mode == "short" else "📖 Развёрнутый"
-    await message.answer(f"✅ Режим ответа: <b>{mode_text}</b>
-
-Следующий запрос к AI будет в этом формате.
-Сбросить: <code>!СБРОС</code>")
+    await message.answer(f"✅ Режим ответа: <b>{mode_text}</b> Следующий запрос к AI будет в этом формате. Сбросить: <code>!СБРОС</code>")
 
 
 async def _set_focus(message: types.Message, topic: str):
