@@ -4,6 +4,7 @@ from cryptography.fernet import Fernet
 
 logger = logging.getLogger(__name__)
 
+# Читаем ключ шифрования из переменных окружения Railway
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 
 if ENCRYPTION_KEY:
@@ -17,11 +18,13 @@ else:
     cipher = None
     logger.warning("⚠️ ENCRYPTION_KEY не задан! BYOK будет недоступен.")
 
+
 def encrypt_key(plain_key: str) -> str:
     """Шифрует текстовый ключ"""
     if not cipher:
         raise ValueError("Шифрование недоступно: добавь ENCRYPTION_KEY в Railway Variables")
     return cipher.encrypt(plain_key.encode()).decode()
+
 
 def decrypt_key(encrypted_key: str) -> str:
     """Расшифровывает ключ"""
