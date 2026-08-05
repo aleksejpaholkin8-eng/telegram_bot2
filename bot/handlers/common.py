@@ -43,11 +43,8 @@ async def _set_focus(message: types.Message, topic: str):
         await session.commit()
 
     await message.answer(
-        f"🎯 <b>Фокус установлен:</b> <i>{topic}</i>
-
-"
-        "AI будет приоритизировать эту тему.
-"
+        f"🎯 <b>Фокус установлен:</b> <i>{topic}</i>"
+        "AI будет приоритизировать эту тему."
         "Сбросить: <code>!СБРОС</code>"
     )
 
@@ -65,9 +62,7 @@ async def _reset_settings(message: types.Message):
             us.json_passport = passport
             await session.commit()
 
-    await message.answer("🔄 <b>Настройки сброшены.</b>
-
-Стандартный режим, фокус снят.")
+    await message.answer("🔄 <b>Настройки сброшены.</b> Стандартный режим, фокус снят.")
 
 
 @router.message(F.text.startswith("!"))
@@ -90,43 +85,27 @@ async def system_commands(message: types.Message):
         tracks = _get_tracks(user_state)
         if not tracks:
             await message.answer(
-                "📋 <b>Треки</b>
-
-"
-                "У тебя пока нет активных треков.
-"
-                "Добавь: <code>!ТРЕК ДОБАВИТЬ Название</code>
-
-"
-                "💡 Примеры:
-"
-                "• Строительство/МОК
-"
-                "• Карьера/Вахта
-"
-                "• Инвестиции
-"
-                "• Корея/TOPIK
-"
-                "• ИИ и технологии/Обучение
-"
+                "📋 <b>Треки</b>"
+                "У тебя пока нет активных треков."
+                "Добавь: <code>!ТРЕК ДОБАВИТЬ Название</code>"
+                "💡 Примеры:"
+                "• Строительство/МОК"
+                "• Карьера/Вахта"
+                "• Инвестиции"
+                "• Корея/TOPIK"
+                "• ИИ и технологии/Обучение"
                 "• Психология/Дисциплина"
             )
             return
 
         active = [t for t in tracks if t.get("status") == "active"]
         paused = [t for t in tracks if t.get("status") == "paused"]
-        text = "📋 <b>Твои треки:</b>
-
-"
+        text = "📋 <b>Твои треки:</b>"
         for t in active:
-            text += f"🟢 <b>{t['name']}</b>
-"
+            text += f"🟢 <b>{t['name']}</b>"
         for t in paused:
-            text += f"⏸ <b>{t['name']}</b> (на паузе)
-"
-        text += f"
-📊 Всего: {len(tracks)} | 🟢 Активных: {len(active)} | ⏸ Пауза: {len(paused)}"
+            text += f"⏸ <b>{t['name']}</b> (на паузе)"
+        text += f"📊 Всего: {len(tracks)} | 🟢 Активных: {len(active)} | ⏸ Пауза: {len(paused)}"
         await message.answer(text)
         return
 
@@ -140,10 +119,7 @@ async def system_commands(message: types.Message):
         _save_tracks(user_state, tracks)
         async with async_session() as session:
             await session.commit()
-        await message.answer(f"✅ Трек «<b>{name}</b>» добавлен!
-
-Всего треков: {len(tracks)}
-Смотри: <code>!ТРЕКИ</code>")
+        await message.answer(f"✅ Трек «<b>{name}</b>» добавлен! Всего треков: {len(tracks)} Смотри: <code>!ТРЕКИ</code>")
         return
 
     if cmd == "!ТРЕК" and len(parts) >= 3 and parts[1].upper() == "УДАЛИТЬ":
@@ -151,9 +127,7 @@ async def system_commands(message: types.Message):
         tracks = _get_tracks(user_state)
         new_tracks = [t for t in tracks if t["name"].lower() != name.lower()]
         if len(new_tracks) == len(tracks):
-            await message.answer(f"❌ Трек «{name}» не найден.
-
-Смотри: <code>!ТРЕКИ</code>")
+            await message.answer(f"❌ Трек «{name}» не найден. Смотри: <code>!ТРЕКИ</code>")
             return
         _save_tracks(user_state, new_tracks)
         async with async_session() as session:
@@ -184,37 +158,22 @@ async def system_commands(message: types.Message):
         active = [t for t in tracks if t.get("status") == "active"]
         paused = [t for t in tracks if t.get("status") == "paused"]
         if not tracks:
-            await message.answer("📊 <b>Прогресс</b>
-
-У тебя пока нет треков.
-Добавь первый: <code>!ТРЕК ДОБАВИТЬ Название</code>")
+            await message.answer("📊 <b>Прогресс</b> У тебя пока нет треков. Добавь первый: <code>!ТРЕК ДОБАВИТЬ Название</code>")
             return
-        text = "📊 <b>Прогресс по трекам</b>
-
-"
+        text = "📊 <b>Прогресс по трекам</b>"
         for t in active:
-            text += f"🟢 <b>{t['name']}</b>
-"
+            text += f"🟢 <b>{t['name']}</b>"
         for t in paused:
-            text += f"⏸ <b>{t['name']}</b>
-"
-        text += f"
-📈 Всего: {len(tracks)} | Активных: {len(active)} | На паузе: {len(paused)}
-
-💡 Подробный дашборд в разработке."
+            text += f"⏸ <b>{t['name']}</b>"
+        text += f"📈 Всего: {len(tracks)} | Активных: {len(active)} | На паузе: {len(paused)} 💡 Подробный дашборд в разработке."
         await message.answer(text)
         return
 
     if cmd == "!ВРЕМЯ":
         await message.answer(
-            "⏱ <b>!ВРЕМЯ</b>
-
-"
-            "Формат: <code>!ВРЕМЯ [название трека] [часы]</code>
-"
-            "Пример: <code>!ВРЕМЯ Корея/TOPIK 2</code>
-
-"
+            "⏱ <b>!ВРЕМЯ</b>"
+            "Формат: <code>!ВРЕМЯ [название трека] [часы]</code>"
+            "Пример: <code>!ВРЕМЯ Корея/TOPIK 2</code>"
             "⚠️ Полный функционал счётчика часов — в разработке."
         )
         return
@@ -229,12 +188,7 @@ async def system_commands(message: types.Message):
     if cmd == "!ФОКУС":
         topic = parts[1] if len(parts) > 1 else ""
         if not topic:
-            await message.answer("🎯 <b>!ФОКУС</b>
-
-Укажи тему:
-<code>!ФОКУС [тема]</code>
-
-Пример: <code>!ФОКУС Корея</code>")
+            await message.answer("🎯 <b>!ФОКУС</b> Укажи тему: <code>!ФОКУС [тема]</code> Пример: <code>!ФОКУС Корея</code>")
             return
         await _set_focus(message, topic)
         return
@@ -244,31 +198,17 @@ async def system_commands(message: types.Message):
         return
 
     await message.answer(
-        f"❓ Неизвестная команда: <code>{message.text[:30]}</code>
-
-"
-        "📋 <b>Доступные !-команды:</b>
-"
-        "<code>!ТРЕКИ</code> — список треков
-"
-        "<code>!ТРЕК ДОБАВИТЬ Название</code>
-"
-        "<code>!ТРЕК УДАЛИТЬ Название</code>
-"
-        "<code>!ТРЕК ПАУЗА Название</code>
-"
-        "<code>!ПРОГРЕСС</code> — прогресс по трекам
-"
-        "<code>!ВРЕМЯ [трек] [часы]</code>
-"
-        "<code>!ЖМИ</code> — сжатый ответ
-"
-        "<code>!РАЗВЕРНИ</code> — подробный ответ
-"
-        "<code>!ФОКУС [тема]</code> — приоритет темы
-"
-        "<code>!СБРОС</code> — сброс настроек
-
-"
+        f"❓ Неизвестная команда: <code>{message.text[:30]}</code>"
+        "📋 <b>Доступные !-команды:</b>"
+        "<code>!ТРЕКИ</code> — список треков"
+        "<code>!ТРЕК ДОБАВИТЬ Название</code>"
+        "<code>!ТРЕК УДАЛИТЬ Название</code>"
+        "<code>!ТРЕК ПАУЗА Название</code>"
+        "<code>!ПРОГРЕСС</code> — прогресс по трекам"
+        "<code>!ВРЕМЯ [трек] [часы]</code>"
+        "<code>!ЖМИ</code> — сжатый ответ"
+        "<code>!РАЗВЕРНИ</code> — подробный ответ"
+        "<code>!ФОКУС [тема]</code> — приоритет темы"
+        "<code>!СБРОС</code> — сброс настроек"
         "🎛 Или используй кнопки: <code>/system</code>"
     )
