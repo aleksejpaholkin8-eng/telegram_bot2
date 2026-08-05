@@ -6,7 +6,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
-from bot.states import TrackMenu
+from bot.states import TrackMenu, FocusInput
 from db.database import async_session
 from db.models import UserState
 from bot.handlers.admin import _send_admin_menu
