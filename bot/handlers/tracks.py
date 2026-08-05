@@ -315,9 +315,32 @@ async def sys_tracks_add_start(callback: types.CallbackQuery, state: FSMContext)
 
 @router.message(TrackMenu.waiting_for_name)
 async def sys_tracks_process_name(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+
+    # === ЗАЩИТА: отмена по /start ===
+    if text == "/start":
+        await state.clear()
+        await cmd_system(message)
+        return
+
+    # === ЗАЩИТА: reply-кнопки меню — не название трека ===
+    if text in ("🎛 Меню", "🔧 Админ-меню"):
+        await state.clear()
+        if text == "🎛 Меню":
+            await cmd_system(message)
+        else:
+            await _send_admin_menu(message, message.from_user.id)
+        return
+
+    # === ЗАЩИТА: команды и !-команды — отмена диалога ===
+    if text.startswith("/") or text.startswith("!"):
+        await state.clear()
+        await message.answer("❌ Добавление трека отменено.")
+        return
+
     data = await state.get_data()
     action = data.get("action")
-    name = message.text.strip()
+    name = text
 
     if action != "add":
         await state.clear()
@@ -379,10 +402,34 @@ async def sys_focus_menu(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+
 @router.message(FocusInput.waiting_for_topic)
 async def sys_focus_process(message: types.Message, state: FSMContext):
     """Сохраняет фокус из FSM-диалога"""
-    topic = message.text.strip()
+    text = message.text.strip()
+
+    # === ЗАЩИТА: отмена по /start ===
+    if text == "/start":
+        await state.clear()
+        await cmd_system(message)
+        return
+
+    # === ЗАЩИТА: reply-кнопки меню — не тема фокуса ===
+    if text in ("🎛 Меню", "🔧 Админ-меню"):
+        await state.clear()
+        if text == "🎛 Меню":
+            await cmd_system(message)
+        else:
+            await _send_admin_menu(message, message.from_user.id)
+        return
+
+    # === ЗАЩИТА: команды и !-команды — отмена диалога ===
+    if text.startswith("/") or text.startswith("!"):
+        await state.clear()
+        await message.answer("❌ Установка фокуса отменена.")
+        return
+
+    topic = text
     if not topic:
         await message.answer("❌ Тема не может быть пустой. Попробуй ещё раз.")
         return
