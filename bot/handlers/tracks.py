@@ -55,7 +55,6 @@ async def cmd_system(message: types.Message):
     builder.button(text="📋 Мои данные", callback_data="sys:profile")
     builder.adjust(2, 2, 1)
     await message.answer(
-        
         "🎛 <b>Главное меню Nexus AI</b>
 
 "
