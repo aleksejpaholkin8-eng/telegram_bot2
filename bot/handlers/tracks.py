@@ -93,7 +93,13 @@ async def sys_tracks_menu(callback: types.CallbackQuery):
     else:
         for idx, t in enumerate(all_tracks):
             icon = "🟢" if t.get("status") == "active" else "⏸"
-            text += f"{icon} <b>{t['name']}</b>\n"
+            hours = t.get('hours', 0.0)
+            goal = t.get('goal_hours', 0.0)
+            if goal > 0:
+                pct = min(100, int((hours / goal) * 100))
+                text += f"{icon} <b>{t['name']}</b> — {hours:.1f}ч / {goal:.0f}ч ({pct}%)\n"
+            else:
+                text += f"{icon} <b>{t['name']}</b> — {hours:.1f}ч\n"
             short_name = t['name'][:15]
             action = "pause" if t.get("status") == "active" else "resume"
             action_icon = "⏸" if action == "pause" else "▶️"
@@ -355,9 +361,21 @@ async def sys_progress_callback(callback: types.CallbackQuery):
     else:
         text = "📊 <b>Прогресс по трекам</b>\n\n"
         for t in active:
-            text += f"🟢 <b>{t['name']}</b> — {t.get('hours', 0)}ч\n"
+            hours = t.get('hours', 0.0)
+            goal = t.get('goal_hours', 0.0)
+            if goal > 0:
+                pct = min(100, int((hours / goal) * 100))
+                text += f"🟢 <b>{t['name']}</b> — {hours:.1f}ч / {goal:.0f}ч ({pct}%)\n"
+            else:
+                text += f"🟢 <b>{t['name']}</b> — {hours:.1f}ч\n"
         for t in paused:
-            text += f"⏸ <b>{t['name']}</b> — {t.get('hours', 0)}ч\n"
+            hours = t.get('hours', 0.0)
+            goal = t.get('goal_hours', 0.0)
+            if goal > 0:
+                pct = min(100, int((hours / goal) * 100))
+                text += f"⏸ <b>{t['name']}</b> — {hours:.1f}ч / {goal:.0f}ч ({pct}%)\n"
+            else:
+                text += f"⏸ <b>{t['name']}</b> — {hours:.1f}ч\n"
         text += f"\n📈 Всего: {len(tracks)} | Активных: {len(active)} | На паузе: {len(paused)}"
 
     builder = InlineKeyboardBuilder()
