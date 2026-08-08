@@ -170,11 +170,68 @@ async def system_commands(message: types.Message):
         return
 
     if cmd == "!ВРЕМЯ":
+        words = text.split()
+        # Минимум 3 слова: !ВРЕМЯ + название + число
+        if len(words) < 3:
+            await message.answer(
+                "⏱ <b>!ВРЕМЯ</b>\n\n"
+                "Формат: <code>!ВРЕМЯ [название трека] [часы]</code>\n"
+                "Пример: <code>!ВРЕМЯ Корея/TOPIK 2</code>\n"
+                "Пример: <code>!ВРЕМЯ Строительство МОК 1.5</code>"
+            )
+            return
+
+        # Последнее слово — часы (можно дробное: 1.5)
+        try:
+            hours = float(words[-1])
+        except ValueError:
+            await message.answer(
+                "❌ Последнее слово должно быть числом часов.\n"
+                "Пример: <code>!ВРЕМЯ Корея/TOPIK 2</code>"
+            )
+            return
+
+        # Всё посередине — название трека
+        track_name = " ".join(words[1:-1]).strip()
+        if not track_name:
+            await message.answer("❌ Укажи название трека.")
+            return
+
+        tracks = _get_tracks(user_state)
+        track_found = None
+
+        # 1) Точное совпадение
+        for t in tracks:
+            if t["name"].lower() == track_name.lower():
+                track_found = t
+                break
+
+        # 2) Частичное совпадение (если точного нет)
+        if not track_found:
+            for t in tracks:
+                if track_name.lower() in t["name"].lower() or t["name"].lower() in track_name.lower():
+                    track_found = t
+                    break
+
+        if not track_found:
+            await message.answer(
+                f"❌ Трек «{track_name}» не найден.\n\n"
+                f"Смотри список: <code>!ТРЕКИ</code>"
+            )
+            return
+
+        # Прибавляем часы
+        old_hours = track_found.get("hours", 0.0)
+        track_found["hours"] = old_hours + hours
+        _save_tracks(user_state, tracks)
+
+        async with async_session() as session:
+            await session.commit()
+
         await message.answer(
-            "⏱ <b>!ВРЕМЯ</b>\n\n"
-            "Формат: <code>!ВРЕМЯ [название трека] [часы]</code>\n"
-            "Пример: <code>!ВРЕМЯ Корея/TOPIK 2</code>\n\n"
-            "⚠️ Полный функционал счётчика часов — в разработке."
+            f"⏱ <b>Трек «{track_found['name']}»</b>\n\n"
+            f"Добавлено: <b>+{hours}ч</b>\n"
+            f"Всего: <b>{track_found['hours']}ч</b>"
         )
         return
 
