@@ -4,6 +4,7 @@ from sqlalchemy import select
 from db.database import async_session
 from db.models import UserState
 from bot.handlers.tracks import _get_tracks, _save_tracks
+from sqlalchemy.orm.attributes import flag_modified
 
 router = Router()
 
@@ -155,17 +156,30 @@ async def system_commands(message: types.Message):
 
     if cmd == "!ПРОГРЕСС":
         tracks = _get_tracks(user_state)
-        active = [t for t in tracks if t.get("status") == "active"]
-        paused = [t for t in tracks if t.get("status") == "paused"]
         if not tracks:
             await message.answer("📊 <b>Прогресс</b>\n\nУ тебя пока нет треков.\nДобавь первый: <code>!ТРЕК ДОБАВИТЬ Название</code>")
             return
+
+        def _bar(pct):
+            filled = int(pct / 10)
+            return "█" * filled + "░" * (10 - filled)
+
         text = "📊 <b>Прогресс по трекам</b>\n\n"
-        for t in active:
-            text += f"🟢 <b>{t['name']}</b>\n"
-        for t in paused:
-            text += f"⏸ <b>{t['name']}</b>\n"
-        text += f"\n📈 Всего: {len(tracks)} | Активных: {len(active)} | На паузе: {len(paused)}\n\n💡 Подробный дашборд в разработке."
+        for t in tracks:
+            name = t['name']
+            hours = t.get('hours', 0.0)
+            goal = t.get('goal_hours', 0.0)
+            icon = "🟢" if t.get("status") == "active" else "⏸"
+
+            if goal > 0:
+                pct = min(100, int((hours / goal) * 100))
+                bar = _bar(pct)
+                text += f"{icon} <b>{name}</b>\n{bar} <b>{pct}%</b> ({hours:.1f} / {goal:.0f}ч)\n\n"
+            else:
+                text += f"{icon} <b>{name}</b>\n⏱ <b>{hours:.1f}ч</b> (цель не задана — <code>!ТРЕК ЦЕЛЬ {name} 100</code>)\n\n"
+
+        total_hours = sum(t.get('hours', 0) for t in tracks)
+        text += f"📈 <b>Всего треков:</b> {len(tracks)} | <b>Часов:</b> {total_hours:.1f}"
         await message.answer(text)
         return
 
@@ -226,6 +240,8 @@ async def system_commands(message: types.Message):
         _save_tracks(user_state, tracks)
 
         async with async_session() as session:
+            merged = await session.merge(user_state)
+            flag_modified(merged, "tracks")
             await session.commit()
 
         await message.answer(
@@ -235,9 +251,58 @@ async def system_commands(message: types.Message):
         )
         return
 
+    if cmd == "!ТРЕК" and len(parts) >= 4 and parts[1].upper() == "ЦЕЛЬ":
+        words = text.split()
+        if len(words) < 4:
+            await message.answer(
+                "🎯 <b>!ТРЕК ЦЕЛЬ</b>\n\n"
+                "Формат: <code>!ТРЕК ЦЕЛЬ [название трека] [целевые часы]</code>\n"
+                "Пример: <code>!ТРЕК ЦЕЛЬ Корея/TOPIK 100</code>"
+            )
+            return
+
+        try:
+            goal = float(words[-1])
+        except ValueError:
+            await message.answer("❌ Последнее слово должно быть числом.")
+            return
+
+        track_name = " ".join(words[2:-1]).strip()
+        tracks = _get_tracks(user_state)
+        track_found = None
+        for t in tracks:
+            if t["name"].lower() == track_name.lower():
+                track_found = t
+                break
+        if not track_found:
+            for t in tracks:
+                if track_name.lower() in t["name"].lower() or t["name"].lower() in track_name.lower():
+                    track_found = t
+                    break
+
+        if not track_found:
+            await message.answer(f"❌ Трек «{track_name}» не найден.\nСмотри: <code>!ТРЕКИ</code>")
+            return
+
+        track_found["goal_hours"] = goal
+        _save_tracks(user_state, tracks)
+        async with async_session() as session:
+            merged = await session.merge(user_state)
+            flag_modified(merged, "tracks")
+            await session.commit()
+
+        await message.answer(
+            f"🎯 <b>Цель установлена</b>\n\n"
+            f"Трек: «{track_found['name']}»\n"
+            f"Цель: <b>{goal}ч</b>\n"
+            f"Факт: <b>{track_found.get('hours', 0)}ч</b>"
+        )
+        return
+
     if cmd == "!ЖМИ":
         await _set_response_mode(message, "short")
         return
+
     if cmd == "!РАЗВЕРНИ":
         await _set_response_mode(message, "long")
         return
@@ -263,6 +328,7 @@ async def system_commands(message: types.Message):
         "<code>!ТРЕК ПАУЗА Название</code>\n"
         "<code>!ПРОГРЕСС</code> — прогресс по трекам\n"
         "<code>!ВРЕМЯ [трек] [часы]</code>\n"
+        "<code>!ТРЕК ЦЕЛЬ [трек] [часы]</code> — цель трека\n"
         "<code>!ЖМИ</code> — сжатый ответ\n"
         "<code>!РАЗВЕРНИ</code> — подробный ответ\n"
         "<code>!ФОКУС [тема]</code> — приоритет темы\n"
