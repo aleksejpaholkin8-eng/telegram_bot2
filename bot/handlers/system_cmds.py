@@ -251,7 +251,7 @@ async def system_commands(message: types.Message):
         )
         return
 
-    if cmd == "!ТРЕК" and len(parts) >= 4 and parts[1].upper() == "ЦЕЛЬ":
+    if cmd == "!ТРЕК" and len(parts) >= 3 and parts[1].upper() == "ЦЕЛЬ":
         words = text.split()
         if len(words) < 4:
             await message.answer(
